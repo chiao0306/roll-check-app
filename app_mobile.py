@@ -17,13 +17,31 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State (存照片用) ---
+# --- 3. 初始化 Session State ---
 if 'photo_gallery' not in st.session_state:
     st.session_state.photo_gallery = []
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
-# --- 4. 核心函數 (Azure OCR) ---
+# --- 4. 側邊欄：模型選擇器 (新增功能) ---
+with st.sidebar:
+    st.header("⚙️ 設定")
+    model_option = st.radio(
+        "選擇 AI 大腦等級:",
+        ("Gemini 2.0 Flash (極速)", "Gemini 2.5 Pro (精準)"),
+        index=0, # 預設使用 Flash，追求速度
+        help="Flash 速度快，適合一般檢查；Pro 邏輯強，適合複雜規範。"
+    )
+    
+    # 根據選擇對應到模型名稱
+    if "Flash" in model_option:
+        target_model = "models/gemini-2.0-flash"
+    else:
+        target_model = "models/gemini-2.5-pro"
+        
+    st.caption(f"目前使用: `{target_model}`")
+
+# --- 5. 核心函數 (Azure OCR) ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
@@ -50,10 +68,11 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     return markdown_output
 
-# --- 5. 核心函數 (Gemini Logic) ---
-def audit_with_gemini(extracted_text, api_key):
+# --- 6. 核心函數 (Gemini Logic) ---
+def audit_with_gemini(extracted_text, api_key, model_name):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("models/gemini-2.5-pro")
+    # 使用使用者選擇的模型
+    model = genai.GenerativeModel(model_name)
     
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
@@ -110,14 +129,13 @@ def audit_with_gemini(extracted_text, api_key):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 6. 手機版 UI (移除相機元件版) ---
+# --- 7. 手機版 UI ---
 st.title("🏭 現場稽核助手")
 
-# A. 檔案上傳區 (在手機上點這個按鈕，可以選擇「直接拍照」或「相簿」)
+# A. 檔案上傳區
 with st.container(border=True):
     st.subheader("📂 新增頁面")
     
-    # 使用 uploader_key 來強制重置上傳元件，達到連續上傳的效果
     uploaded_files = st.file_uploader(
         "點擊上傳 (手機可選直接拍照)", 
         type=['jpg', 'png', 'jpeg'], 
@@ -126,11 +144,8 @@ with st.container(border=True):
     )
 
     if uploaded_files:
-        # 將新上傳的檔案加入暫存區
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
-        
-        # 更新 key，強制清空上傳元件，方便下一輪上傳
         st.session_state.uploader_key += 1
         st.rerun()
 
@@ -139,19 +154,21 @@ if st.session_state.photo_gallery:
     st.divider()
     st.write(f"📊 已累積 **{len(st.session_state.photo_gallery)}** 頁文件")
     
-    # 縮圖顯示
     cols = st.columns(3)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 3]:
             st.image(img, caption=f"P.{idx+1}", use_container_width=True)
-            # 刪除按鈕
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
 
     # C. 執行按鈕
     st.divider()
-    if st.button("🚀 開始分析", type="primary", use_container_width=True):
+    
+    # 顯示目前使用的模型，讓使用者安心
+    button_label = f"🚀 開始分析 ({'極速版' if 'Flash' in model_option else '精準版'})"
+    
+    if st.button(button_label, type="primary", use_container_width=True):
         
         progress_bar = st.progress(0)
         status = st.empty()
@@ -170,8 +187,10 @@ if st.session_state.photo_gallery:
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text("Gemini 2.5 Pro 正在進行邏輯稽核...")
-        result_str = audit_with_gemini(all_text, GEMINI_KEY)
+        status.text(f"{model_option} 正在進行邏輯稽核...")
+        # 傳入選擇的模型名稱
+        result_str = audit_with_gemini(all_text, GEMINI_KEY, target_model)
+        
         progress_bar.progress(100)
         status.text("完成！")
 
@@ -198,7 +217,6 @@ if st.session_state.photo_gallery:
             st.error("分析錯誤")
             st.code(result_str)
             
-    # 清空按鈕
     if st.button("🗑️ 清除所有照片"):
         st.session_state.photo_gallery = []
         st.rerun()
