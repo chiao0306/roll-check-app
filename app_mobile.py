@@ -4,13 +4,11 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult
 import google.generativeai as genai
 import json
-from io import BytesIO
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered") # 手機版用 centered 比較好看
+st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
-# --- 2. 秘密金鑰讀取 (從雲端設定讀取) ---
-# 這樣就不用在介面上輸入了
+# --- 2. 秘密金鑰讀取 ---
 try:
     DOC_ENDPOINT = st.secrets["DOC_ENDPOINT"]
     DOC_KEY = st.secrets["DOC_KEY"]
@@ -19,17 +17,16 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State (用來存照片) ---
+# --- 3. 初始化 Session State (存照片用) ---
 if 'photo_gallery' not in st.session_state:
-    st.session_state.photo_gallery = [] # 存放所有拍好的照片
-if 'camera_key' not in st.session_state:
-    st.session_state.camera_key = 0     # 用來重置相機
+    st.session_state.photo_gallery = []
+if 'uploader_key' not in st.session_state:
+    st.session_state.uploader_key = 0
 
-# --- 4. 核心函數 (維持不變，省略細節以節省版面，請直接用上一版的邏輯) ---
-# ... (這裡放入 extract_layout_with_azure 函數) ...
+# --- 4. 核心函數 (Azure OCR) ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
-    file_content = file_obj.getvalue() # 注意：Session State 裡的圖片要用 getvalue()
+    file_content = file_obj.getvalue()
     poller = client.begin_analyze_document("prebuilt-layout", file_content, content_type="application/octet-stream")
     result: AnalyzeResult = poller.result()
     
@@ -53,13 +50,11 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     return markdown_output
 
-# ... (這裡放入 audit_with_gemini 函數，完全沿用上一版的邏輯) ...
+# --- 5. 核心函數 (Gemini Logic) ---
 def audit_with_gemini(extracted_text, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
     
-    # ... (Prompt 保持上一版最強的那個設定，這裡省略以節省篇幅) ...
-    # 請務必把上一版完整的 system_prompt 貼在這裡
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
     你的輸入是由 Azure OCR 提取的表格文字。請忽略簽名，專注於數據稽核。
@@ -74,7 +69,6 @@ def audit_with_gemini(extracted_text, api_key):
     - **再生車修 (Finish Turning)**：
        - 規格通常為「區間」 (如 101.64~101.66)。
        - 判定規則：實測值 必須 **包含於 (Inclusive)** 上下限之間。
-       - **重要範例**：若規格 101.64~101.66，實測 **101.66 為 PASS**，實測 **101.64 為 PASS**。只有超過這個範圍才算 FAIL。
 
     ### 2. 數量一致性檢查 (Quantity Check) - 【強制執行】：
     - **步驟 A**：讀取項目名稱中的數量要求，例如 `(10PC)` 或 `(5PC)`。
@@ -89,7 +83,6 @@ def audit_with_gemini(extracted_text, api_key):
 
     ### 4. 數學比對嚴謹度：
     - 進行 **小數點後兩位** 的精確比對。
-    - 規格下限 203.52，實測 203.50 -> **FAIL** (因為 203.50 < 203.52)。
 
     ### 輸出格式 (JSON Only)：
     {
@@ -102,11 +95,10 @@ def audit_with_gemini(extracted_text, api_key):
            "spec_logic": "說明使用的判定標準",
            "measured": "實測數據串",
            "issue_type": "數值超規 / 數量不符",
-           "reason": "詳細說明 (例如: 應測10PC，實測僅8PC / 101.67 超出上限 101.66)"
+           "reason": "詳細說明"
          }
       ]
     }
-
     """
     
     try:
@@ -118,50 +110,48 @@ def audit_with_gemini(extracted_text, api_key):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 5. 手機版專用 UI ---
+# --- 6. 手機版 UI (移除相機元件版) ---
 st.title("🏭 現場稽核助手")
 
-# A. 拍照區
-with st.expander("📸 開啟相機 / 上傳照片", expanded=True):
-    # 這是 Streamlit 的相機元件
-    # 在手機上，它會直接呼叫前/後鏡頭
-    img_file_buffer = st.camera_input("拍攝檢驗單", key=f"cam_{st.session_state.camera_key}")
+# A. 檔案上傳區 (在手機上點這個按鈕，可以選擇「直接拍照」或「相簿」)
+with st.container(border=True):
+    st.subheader("📂 新增頁面")
+    
+    # 使用 uploader_key 來強制重置上傳元件，達到連續上傳的效果
+    uploaded_files = st.file_uploader(
+        "點擊上傳 (手機可選直接拍照)", 
+        type=['jpg', 'png', 'jpeg'], 
+        accept_multiple_files=True,
+        key=f"uploader_{st.session_state.uploader_key}"
+    )
 
-    if img_file_buffer is not None:
-        # 當拍下一張照片時
-        timestamp = img_file_buffer.name
-        # 存入列表
-        st.session_state.photo_gallery.append(img_file_buffer)
-        # 強制重置相機元件，讓使用者可以拍下一張
-        st.session_state.camera_key += 1
-        st.rerun()
-
-    # 也可以保留「從相簿上傳」的選項
-    uploaded_files = st.file_uploader("或從相簿選擇", accept_multiple_files=True)
     if uploaded_files:
+        # 將新上傳的檔案加入暫存區
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
-        # 清空上傳暫存
+        
+        # 更新 key，強制清空上傳元件，方便下一輪上傳
+        st.session_state.uploader_key += 1
         st.rerun()
 
-# B. 預覽與管理區 (實現你的「重拍/刪除」需求)
+# B. 預覽與管理區
 if st.session_state.photo_gallery:
     st.divider()
     st.write(f"📊 已累積 **{len(st.session_state.photo_gallery)}** 頁文件")
     
-    # 顯示縮圖列
+    # 縮圖顯示
     cols = st.columns(3)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 3]:
-            st.image(img, caption=f"第 {idx+1} 頁")
-            # 刪除按鈕 (如果不滿意這張)
-            if st.button("🗑️", key=f"del_{idx}"):
+            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
+            # 刪除按鈕
+            if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
 
     # C. 執行按鈕
     st.divider()
-    if st.button("🚀 結束拍照，開始分析", type="primary", use_container_width=True):
+    if st.button("🚀 開始分析", type="primary", use_container_width=True):
         
         progress_bar = st.progress(0)
         status = st.empty()
@@ -200,19 +190,18 @@ if st.session_state.photo_gallery:
                 st.error(f"發現 {len(issues)} 個異常")
                 for item in issues:
                     with st.container(border=True):
-                        c1, c2 = st.columns([1, 3])
-                        c1.error(item.get('issue_type'))
-                        c1.caption(f"第 {item.get('page')} 頁")
-                        c2.markdown(f"**{item.get('item')}**")
-                        c2.write(f"實測: `{item.get('measured')}`")
-                        c2.caption(f"原因: {item.get('reason')}")
+                        st.markdown(f"**{item.get('item')}**")
+                        st.write(f"🚫 `{item.get('issue_type')}`")
+                        st.caption(f"實測: {item.get('measured')}")
+                        st.caption(f"原因: {item.get('reason')}")
         except:
             st.error("分析錯誤")
             st.code(result_str)
             
     # 清空按鈕
-    if st.button("清除所有照片，重新開始"):
+    if st.button("🗑️ 清除所有照片"):
         st.session_state.photo_gallery = []
         st.rerun()
+
 else:
-    st.info("👆 請使用上方相機拍攝第一頁")
+    st.info("👆 請點擊上方按鈕開始新增照片")
