@@ -17,7 +17,7 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State (存照片用) ---
+# --- 3. 初始化 Session State ---
 if 'photo_gallery' not in st.session_state:
     st.session_state.photo_gallery = []
 if 'uploader_key' not in st.session_state:
@@ -31,6 +31,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
+    # 提取表格
     if result.tables:
         for idx, table in enumerate(result.tables):
             page_num = "Unknown"
@@ -48,34 +49,55 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     max_col = max(rows[r].keys())
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
-    return markdown_output
+    
+    # 同時回傳全文 (Raw Text)，確保表頭資訊不會因為沒被識別為表格而遺漏
+    return markdown_output, result.content
 
-# --- 5. 核心函數 (Gemini Logic) ---
-def audit_with_gemini(extracted_text, api_key):
+# --- 5. 核心函數 (Gemini Logic - 含表頭檢查) ---
+def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
+    # 鎖定使用最強模型
     model = genai.GenerativeModel("models/gemini-2.5-pro")
     
+    # 組合所有頁面的資料給 AI
+    combined_input = "以下是每一頁的 OCR 資料：\n"
+    for idx, data in enumerate(extracted_data_list):
+        combined_input += f"\n--- 第 {idx + 1} 頁資料 ---\n"
+        combined_input += f"【表格內容】:\n{data['table']}\n"
+        combined_input += f"【全文內容】:\n{data['text']}\n"
+
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
-    你的輸入是由 Azure OCR 提取的表格文字。請忽略簽名，專注於數據稽核。
+    輸入資料包含多頁的「表格Markdown」與「全文Text」。
     
-    請執行以下 **深度邏輯稽核 (Deep Reasoning)**：
+    請執行以下 **全方位邏輯稽核**：
 
-    ### 1. 製程判定邏輯 (Process Logic) - 【修正邊界定義】：
-    - **未再生/車修**：
-       - 判定規則：實測值 **<= (小於或等於)** 規格值。
-    - **銲補 (Welding)**：
-       - 判定規則：實測值 **>= (大於或等於)** 規格值。
-    - **再生車修 (Finish Turning)**：
-       - 規格通常為「區間」 (如 101.64~101.66)。
-       - 判定規則：實測值 必須 **包含於 (Inclusive)** 上下限之間。
+    ### 0. 跨頁一致性與格式檢查 (Header Consistency) - 【新增規則】：
+    - **目標欄位**：請在每一頁中找出以下資訊：
+      1. **工令編號** (Job No)
+      2. **預定交貨日期** (Scheduled Delivery Date)
+      3. **實際交貨日期** (Actual Delivery Date)
+    
+    - **一致性檢查**：
+      - 所有頁面的「工令編號」必須完全相同。
+      - 所有頁面的「預定交貨日期」必須完全相同。
+      - 所有頁面的「實際交貨日期」必須完全相同。
+      - 若發現不同，請回報 **FAIL (跨頁資訊不符)**，並註明是哪一頁不同。
 
-    ### 2. 數量一致性檢查 (Quantity Check) - 【強制執行】：
-    - **步驟 A**：讀取項目名稱中的數量要求，例如 `(10PC)` 或 `(5PC)`。
-    - **步驟 B**：**逐一清點** 該列提取到的實測數據個數 (Count)。
-    - **步驟 C**：比對。若 `實測個數 < 要求個數` -> **FAIL (數量不符)**。
-    - **注意**：請對「所有項目」（包含銲補、未再生、再生）都執行此檢查。
-    - **例外**：僅「熱處理」項目忽略數量。
+    - **日期格式檢查**：
+      - 日期必須符合 `YYY.MM.DD` 格式 (例如 `114.10.30`)。
+      - `YYY` 通常為民國年 (3碼)。
+      - 若格式錯誤 (如 `114/10/30` 或 `2025.10.30`) -> **FAIL (日期格式錯誤)**。
+
+    ### 1. 製程判定邏輯 (Process Logic)：
+    - **未再生/車修**：實測值 **<= (小於或等於)** 規格值。
+    - **銲補 (Welding)**：實測值 **>= (大於或等於)** 規格值。
+    - **再生車修**：實測值必須 **包含於 (Inclusive)** 上下限之間。
+
+    ### 2. 數量一致性檢查 (Quantity Check)：
+    - **步驟**：讀取項目名稱中的數量要求 `(10PC)` -> 清點該列實測數據個數 -> 比對。
+    - **規則**：若 `實測個數 < 要求個數` -> **FAIL (數量不符)**。
+    - **例外**：僅「熱處理」忽略數量。
 
     ### 3. 多重規格智慧歸類 (Multi-Spec Matching)：
     - 若項目有多種尺寸規格（如：一、157mm；二、127mm）。
@@ -86,15 +108,15 @@ def audit_with_gemini(extracted_text, api_key):
 
     ### 輸出格式 (JSON Only)：
     {
-      "job_no": "工令編號",
+      "job_no": "工令編號 (以第一頁為準)",
       "summary": "總結發現幾個異常",
       "issues": [
          {
            "page": 1,
-           "item": "項目名稱",
-           "spec_logic": "說明使用的判定標準",
-           "measured": "實測數據串",
-           "issue_type": "數值超規 / 數量不符",
+           "item": "項目名稱 或 表頭欄位",
+           "spec_logic": "判定標準 (例如: 格式應為 YYY.MM.DD)",
+           "measured": "實測數據",
+           "issue_type": "數值超規 / 數量不符 / 跨頁資訊不符 / 日期格式錯誤",
            "reason": "詳細說明"
          }
       ]
@@ -103,21 +125,20 @@ def audit_with_gemini(extracted_text, api_key):
     
     try:
         response = model.generate_content(
-            [system_prompt, f"表格數據:\n{extracted_text}"],
+            [system_prompt, combined_input],
             generation_config={"response_mime_type": "application/json"}
         )
         return response.text
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 6. 手機版 UI (移除相機元件版) ---
+# --- 6. 手機版 UI ---
 st.title("🏭 現場稽核助手")
 
-# A. 檔案上傳區 (在手機上點這個按鈕，可以選擇「直接拍照」或「相簿」)
+# A. 檔案上傳區
 with st.container(border=True):
     st.subheader("📂 新增頁面")
     
-    # 使用 uploader_key 來強制重置上傳元件，達到連續上傳的效果
     uploaded_files = st.file_uploader(
         "點擊上傳 (手機可選直接拍照)", 
         type=['jpg', 'png', 'jpeg'], 
@@ -126,11 +147,8 @@ with st.container(border=True):
     )
 
     if uploaded_files:
-        # 將新上傳的檔案加入暫存區
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
-        
-        # 更新 key，強制清空上傳元件，方便下一輪上傳
         st.session_state.uploader_key += 1
         st.rerun()
 
@@ -139,39 +157,43 @@ if st.session_state.photo_gallery:
     st.divider()
     st.write(f"📊 已累積 **{len(st.session_state.photo_gallery)}** 頁文件")
     
-    # 縮圖顯示
     cols = st.columns(3)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 3]:
             st.image(img, caption=f"P.{idx+1}", use_container_width=True)
-            # 刪除按鈕
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
 
     # C. 執行按鈕
     st.divider()
-    if st.button("🚀 開始分析", type="primary", use_container_width=True):
+    
+    if st.button("🚀 開始分析 (Gemini 2.5 Pro)", type="primary", use_container_width=True):
         
         progress_bar = st.progress(0)
         status = st.empty()
         
         # 1. OCR
-        all_text = ""
+        extracted_data_list = [] # 儲存每一頁的解析結果
         total_imgs = len(st.session_state.photo_gallery)
         
         for i, img in enumerate(st.session_state.photo_gallery):
             status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
             try:
-                txt = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
-                all_text += f"\n--- Page {i+1} ---\n{txt}"
+                table_md, raw_txt = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
+                extracted_data_list.append({
+                    "page": i + 1,
+                    "table": table_md,
+                    "text": raw_txt
+                })
             except Exception as e:
                 st.error(f"第 {i+1} 頁讀取失敗: {e}")
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text("Gemini 2.5 Pro 正在進行邏輯稽核...")
-        result_str = audit_with_gemini(all_text, GEMINI_KEY)
+        status.text(f"Gemini 2.5 Pro 正在進行邏輯稽核 (含表頭檢查)...")
+        result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY)
+        
         progress_bar.progress(100)
         status.text("完成！")
 
@@ -192,13 +214,12 @@ if st.session_state.photo_gallery:
                     with st.container(border=True):
                         st.markdown(f"**{item.get('item')}**")
                         st.write(f"🚫 `{item.get('issue_type')}`")
-                        st.caption(f"實測: {item.get('measured')}")
+                        st.caption(f"實測/內容: {item.get('measured')}")
                         st.caption(f"原因: {item.get('reason')}")
         except:
             st.error("分析錯誤")
             st.code(result_str)
             
-    # 清空按鈕
     if st.button("🗑️ 清除所有照片"):
         st.session_state.photo_gallery = []
         st.rerun()
