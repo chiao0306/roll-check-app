@@ -182,7 +182,7 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
-    if st.button("🚀 開始分析 (軸頸修復版)", type="primary", use_container_width=True):
+    if st.button("🚀 開始分析", type="primary", use_container_width=True):
         
         start_time = time.time()
         
@@ -265,3 +265,4 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
