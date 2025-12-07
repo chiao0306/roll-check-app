@@ -4,7 +4,7 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult
 import google.generativeai as genai
 import json
-import time  # <--- 新增時間模組
+import time
 
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
@@ -58,7 +58,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 ---
+# --- 5. 核心函數：Gemini 神之腦 (強力排除簽名版) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -73,15 +73,20 @@ def audit_with_gemini(extracted_data_list, api_key):
     你是一位極度嚴謹的中鋼機械品管稽核員。
     請依據 Azure OCR 提取的表格文字進行稽核。
 
+    ### ⛔️ 極重要排除指令 (Exclusion Rules)：
+    - **完全無視簽名欄位**：請忽略頁面底部的主管/承辦人簽名、簽核日期。
+    - 即使簽核日期格式錯誤 (如 0月) 或未簽名，也 **絕對不要** 回報異常。
+    - 請將注意力 100% 集中在「數據表格」與「表頭資訊」。
+
     ### 0. 核心任務與數據清洗：
     - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`)。
-    - **頁碼追蹤**：異常若涉及跨頁，請列出頁碼 (如 "1, 2")。
+    - **頁碼追蹤**：異常若涉及跨頁，請列出頁碼。
     - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
-    ### 1. 跨頁一致性檢查 (Header Consistency)：
-    - **檢查項目**：工令編號、預定交貨日期、實際交貨日期。
+    ### 1. 跨頁一致性檢查 (Header Only)：
+    - **檢查範圍**：僅限表頭的工令編號、預定交貨日期、實際交貨日期。
     - **規則**：所有頁面的上述欄位內容必須「完全相同」。
-    - **日期格式**：`YYY.MM.DD` (允許空格)，`/` 或 `-` 為 FAIL。
+    - **日期格式**：僅檢查「表頭日期」需符合 `YYY.MM.DD` (允許空格)。
 
     ### 2. 製程判定邏輯 (分軌制)：
 
@@ -124,7 +129,7 @@ def audit_with_gemini(extracted_data_list, api_key):
          {
            "page": "頁碼",
            "item": "項目名稱",
-           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 日期格式錯誤",
+           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤",
            "spec_logic": "判定標準",
            "common_reason": "錯誤原因概述",
            "failures": [
@@ -180,7 +185,6 @@ if st.session_state.photo_gallery:
     
     if st.button("🚀 開始分析", type="primary", use_container_width=True):
         
-        # --- 計時開始 ---
         start_time = time.time()
         
         status = st.empty()
@@ -211,34 +215,31 @@ if st.session_state.photo_gallery:
         progress_bar.progress(100)
         status.text("完成！")
         
-        # --- 計時結束 ---
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        # 3. 顯示結果 (含計時)
+        # 3. 顯示結果
         try:
             result = json.loads(result_str)
             if isinstance(result, list): result = result[0] if len(result) > 0 else {}
             
-            # 在成功訊息旁邊顯示耗時
             st.success(f"工令: {result.get('job_no', 'Unknown')} | ⏱️ 耗時: {elapsed_time:.1f} 秒")
             
             issues = result.get('issues', [])
             if not issues:
                 st.balloons()
-                st.info("✅ 全數合格！數據邏輯與流程皆無異常。")
+                st.success("✅ 全數合格！")
             else:
                 st.error(f"發現 {len(issues)} 類異常項目")
                 
                 for item in issues:
                     with st.container(border=True):
-                        # 標題
                         col_head1, col_head2 = st.columns([3, 1])
                         page_str = str(item.get('page', '?'))
                         col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
                         
                         itype = item.get('issue_type', '異常')
-                        if "流程" in itype or "尺寸" in itype or "日期" in itype:
+                        if "流程" in itype or "尺寸" in itype:
                             col_head2.error(f"🛑 {itype}")
                         else:
                             col_head2.warning(f"⚠️ {itype}")
@@ -247,7 +248,6 @@ if st.session_state.photo_gallery:
                         if item.get('spec_logic'):
                             st.caption(f"標準: {item.get('spec_logic')}")
                         
-                        # 明細表格
                         failures = item.get('failures', [])
                         if failures:
                             table_data = [{"滾輪編號": f.get('id', '未知'), "實測值": f.get('val', 'N/A')} for f in failures]
