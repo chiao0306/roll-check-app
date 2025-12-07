@@ -62,7 +62,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (修復軸頸邏輯) ---
+# --- 5. 核心函數：Gemini 神之腦 (數量邏輯微調版) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -82,19 +82,28 @@ def audit_with_gemini(extracted_data_list, api_key):
     - **分軌識別**：判斷該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
     - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
-    ### 1. 數量一致性檢查 (Quantity Logic Split)：
-    - **情境 A：本體 (Body)**
-      - 規則：編號必須 **唯一**。若重複 -> **FAIL**。
-      - 數量：獨立編號總數 必須等於 要求數量。
-    - **情境 B：軸頸 (Journal)**
+    ### 1. 數量一致性檢查 (Quantity Logic Split) - 【微調】：
+    - **優先檢查：特例項目**
+      - **熱處理 (Heat Treatment)**：
+        - 規則：**忽略** 項目名稱中的數量要求 (PC)。
+        - 判定：只要該欄位有填寫數據 (通常為重量 KG)，且筆數 >= 1，即視為 **PASS**。
+        - 僅在完全無數據時判定 FAIL。
+    
+    - **情境 A：軸頸 (Journal)**
+      - 適用：項目名稱含「軸頸」或「軸位」。
       - 規則：允許同一編號出現最多 **2次**。
       - 數量：**總資料筆數** (含重複) 必須等於 要求數量。
+
+    - **情境 B：本體 (Body) 與 其他項目 (預設)**
+      - 適用：項目名稱含「本體」或 未包含上述關鍵字的項目。
+      - 規則：實測數據的「編號」必須 **唯一**。若有重複 -> **FAIL (編號重複)**。
+      - 數量：獨立編號總數 必須等於 要求數量。
 
     ### 2. 存在性依賴檢查 (Dependency Check)：
     - **規則**：軸頸出現的編號，必須曾經在本體相關項目出現過。
     - **異常**：若軸頸有編號 `X`，但本體完全沒出現過 `X` -> **FAIL (孤立軸頸)**。
 
-    ### 3. 製程判定邏輯 (分軌制) - 【修復軸頸規則】：
+    ### 3. 製程判定邏輯 (分軌制)：
 
     #### A. 【本體 (Body)】未再生/車修：
     - **規格解析**：忽略「每次車修Xmm」，只看「至 Ymm」。取最大值。
@@ -102,7 +111,7 @@ def audit_with_gemini(extracted_data_list, api_key):
       1. **整數** (未完工)：實測值 **<=** 規格值。
       2. **小數** (已完工)：實測值 **>=** 規格值，且格式需為 `#.##`。
 
-    #### B. 【軸頸 (Journal)】未再生/車修 - (邏輯還原)：
+    #### B. 【軸頸 (Journal)】未再生/車修：
     - **步驟 1 (智慧歸類)**：若有多個規格 (如 157, 127)，請計算實測值與各規格的距離，選出 **數值最接近** 的那個當作「目標規格」。
     - **步驟 2 (數值比對)**：實測值 必須 **<= (小於等於)** 目標規格。
       - 範例：目標 127，實測 126 -> **PASS** (因為 126 <= 127)。
@@ -129,7 +138,7 @@ def audit_with_gemini(extracted_data_list, api_key):
            "page": "頁碼",
            "item": "項目名稱",
            "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 編號異常",
-           "spec_logic": "判定標準 (例如: 接近 127 且 <= 127)",
+           "spec_logic": "判定標準",
            "common_reason": "錯誤原因概述",
            "failures": [
               {"id": "Y5612001", "val": "136"}
@@ -265,4 +274,3 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
-
