@@ -214,7 +214,7 @@ if st.session_state.photo_gallery:
     with col_btn2:
         # 清除按鈕稍微往下移一點點，對齊大按鈕
         st.write("") 
-        clear_btn = st.button("🗑️", help="清除所有", use_container_width=True)
+        clear_btn = st.button("清除照片🗑️", help="清除所有", use_container_width=True)
 
     # 清除邏輯
     if clear_btn:
@@ -312,3 +312,4 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
