@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components # 引入組件庫用於自動捲動
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult
@@ -9,14 +10,15 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：加大按鈕 ---
+# --- CSS 樣式：只加大 Primary 按鈕 (開始分析)，其他按鈕保持原狀 ---
 st.markdown("""
 <style>
-div.stButton > button {
-    height: 80px;          /* 高度加倍 */
-    font-size: 20px;       /* 字體加大 */
-    font-weight: bold;     /* 字體加粗 */
-    border-radius: 10px;   /* 圓角 */
+/* 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
+button[kind="primary"] {
+    height: 80px;          
+    font-size: 20px;       
+    font-weight: bold;     
+    border-radius: 10px;   
 }
 </style>
 """, unsafe_allow_html=True)
@@ -41,7 +43,6 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
     
-    # 呼叫 Azure
     poller = client.begin_analyze_document(
         "prebuilt-layout", 
         file_content,
@@ -50,7 +51,6 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
-    # A. 提取表格
     if result.tables:
         for idx, table in enumerate(result.tables):
             page_num = "Unknown"
@@ -69,12 +69,10 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
-    # B. 提取表頭 (前 300 字)
     header_snippet = result.content[:300] if result.content else ""
-    
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (修復尺寸邏輯版) ---
+# --- 5. 核心函數：Gemini 神之腦 (Prompt 保持原樣) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -139,7 +137,7 @@ def audit_with_gemini(extracted_data_list, api_key):
     - 數值：**包含於 (Inclusive)** 上下限之間。
     - 格式：忽略空格後，必須精確到小數點後兩位。
 
-    ### 4. 全域流程防呆 (Process Integrity) - 【補回尺寸邏輯】：
+    ### 4. 全域流程防呆 (Process Integrity)：
     - **前向檢查**：本體未再生已完工(小數) -> 不可出現在後續。
     - **後向檢查**：出現在銲補/再生 -> 前面必須有未再生紀錄。
     - **尺寸合理性檢查 (Dimension Continuity)**：
@@ -192,6 +190,16 @@ with st.container(border=True):
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
         st.session_state.uploader_key += 1
+        
+        # 【自動捲動】當有新照片時，自動捲動到底部
+        components.html(
+            """
+            <script>
+                window.parent.document.querySelector('section.main').scrollTo(0, 99999);
+            </script>
+            """,
+            height=0
+        )
         st.rerun()
 
 # B. 預覽與管理區
@@ -202,7 +210,12 @@ if st.session_state.photo_gallery:
     cols = st.columns(3)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 3]:
-            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
+            # 【UI 優化】點擊放大檢視
+            # 使用 expander 讓圖片可以展開變大，預設只顯示小縮圖
+            with st.expander(f"🔍 P.{idx+1}", expanded=False):
+                st.image(img, use_container_width=True)
+                
+            # 刪除按鈕 (這裡的按鈕不會變大，因為沒有 kind="primary")
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
@@ -210,6 +223,7 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
+    # 這裡使用 type="primary"，會被 CSS 放大
     if st.button("🚀 開始分析", type="primary", use_container_width=True):
         
         start_time = time.time()
