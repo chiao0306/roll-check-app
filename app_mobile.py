@@ -29,6 +29,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
     
+    # 呼叫 Azure
     poller = client.begin_analyze_document(
         "prebuilt-layout", 
         file_content,
@@ -37,6 +38,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
+    # A. 提取表格
     if result.tables:
         for idx, table in enumerate(result.tables):
             page_num = "Unknown"
@@ -55,10 +57,12 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
+    # B. 提取表頭 (前 300 字)
     header_snippet = result.content[:300] if result.content else ""
+    
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (軸頸邏輯升級) ---
+# --- 5. 核心函數：Gemini 神之腦 (修復軸頸邏輯) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -78,37 +82,40 @@ def audit_with_gemini(extracted_data_list, api_key):
     - **分軌識別**：判斷該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
     - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
-    ### 1. 數量一致性檢查 (Quantity Logic Split) - 【重要更新】：
-    - **通用步驟**：讀取項目名稱中的數量要求 `(10PC)`。
+    ### 1. 數量一致性檢查 (Quantity Logic Split)：
     - **情境 A：本體 (Body)**
-      - 規則：實測數據的「編號」必須 **唯一 (Unique)**。
-      - 判定：若有重複編號 -> **FAIL (本體編號重複)**。
+      - 規則：編號必須 **唯一**。若重複 -> **FAIL**。
       - 數量：獨立編號總數 必須等於 要求數量。
     - **情境 B：軸頸 (Journal)**
-      - 規則：允許同一編號出現最多 **2次** (驅動端/非驅動端)。
-      - 判定：若同一編號出現 **3次以上** -> **FAIL (軸頸重複過多)**。
-      - 數量：**總資料筆數** (包含重複編號) 必須等於 要求數量。
-      - **範例**：要求 6PC，數據為 [A, B, C, D, E, E] -> 總數6，E重複2次 -> **PASS**。
+      - 規則：允許同一編號出現最多 **2次**。
+      - 數量：**總資料筆數** (含重複) 必須等於 要求數量。
 
-    ### 2. 存在性依賴檢查 (Dependency Check) - 【新增】：
-    - **規則**：檢查所有出現在「軸頸 (Journal)」項目的編號。
-    - **判定**：該編號 **必須** 曾經出現在「本體 (Body)」的相關項目中 (如本體未再生/本體銲補/本體再生)。
-    - **異常**：若軸頸有編號 `X`，但全文件中找不到本體 `X` 的紀錄 -> **FAIL (孤立軸頸：無本體紀錄)**。
+    ### 2. 存在性依賴檢查 (Dependency Check)：
+    - **規則**：軸頸出現的編號，必須曾經在本體相關項目出現過。
+    - **異常**：若軸頸有編號 `X`，但本體完全沒出現過 `X` -> **FAIL (孤立軸頸)**。
 
-    ### 3. 製程判定邏輯：
-    - **A. 本體未再生**：
-      - 忽略「每次車修Xmm」，只看「至 Ymm」。取最大值。
-      - 整數 (未完工)：<= 規格。
-      - 小數 (已完工)：>= 規格，且格式需為 `#.##`。
-    - **B. 軸頸未再生**：
-      - 規格比對：智慧歸類。
-      - 強制規則：必須為 **整數**。小數 -> **FAIL**。
-    - **C. 銲補**：>= 規格。
-    - **D. 再生車修**：
-      - 數值：**包含於 (Inclusive)** 上下限之間。
-      - 格式：忽略空格後，必須精確到小數點後兩位。
+    ### 3. 製程判定邏輯 (分軌制) - 【修復軸頸規則】：
 
-    ### 4. 全域流程防呆：
+    #### A. 【本體 (Body)】未再生/車修：
+    - **規格解析**：忽略「每次車修Xmm」，只看「至 Ymm」。取最大值。
+    - **邏輯分流**：
+      1. **整數** (未完工)：實測值 **<=** 規格值。
+      2. **小數** (已完工)：實測值 **>=** 規格值，且格式需為 `#.##`。
+
+    #### B. 【軸頸 (Journal)】未再生/車修 - (邏輯還原)：
+    - **步驟 1 (智慧歸類)**：若有多個規格 (如 157, 127)，請計算實測值與各規格的距離，選出 **數值最接近** 的那個當作「目標規格」。
+    - **步驟 2 (數值比對)**：實測值 必須 **<= (小於等於)** 目標規格。
+      - 範例：目標 127，實測 126 -> **PASS** (因為 126 <= 127)。
+    - **步驟 3 (格式檢查)**：實測值必須為 **整數**。若有小數點 -> **FAIL** (軸頸未再生不可完工)。
+
+    #### C. 銲補 (Welding) (通用)：
+    - 規則：實測值 **>=** 規格。
+
+    #### D. 再生車修 (Finish) (通用)：
+    - 數值：**包含於 (Inclusive)** 上下限之間。
+    - 格式：忽略空格後，必須精確到小數點後兩位。
+
+    ### 4. 全域流程防呆 (Process Integrity)：
     - **前向檢查**：本體未再生已完工(小數) -> 不可出現在後續。
     - **後向檢查**：出現在銲補/再生 -> 前面必須有未再生紀錄。
     - **跨頁一致性**：工令、日期需一致。
@@ -122,7 +129,7 @@ def audit_with_gemini(extracted_data_list, api_key):
            "page": "頁碼",
            "item": "項目名稱",
            "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 編號異常",
-           "spec_logic": "判定標準",
+           "spec_logic": "判定標準 (例如: 接近 127 且 <= 127)",
            "common_reason": "錯誤原因概述",
            "failures": [
               {"id": "Y5612001", "val": "136"}
@@ -175,7 +182,7 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
-    if st.button("🚀 開始分析 (軸頸邏輯版)", type="primary", use_container_width=True):
+    if st.button("🚀 開始分析 (軸頸修復版)", type="primary", use_container_width=True):
         
         start_time = time.time()
         
@@ -201,7 +208,7 @@ if st.session_state.photo_gallery:
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text(f"Gemini 2.5 Pro 正在進行軸頸歸戶與稽核...")
+        status.text(f"Gemini 2.5 Pro 正在進行邏輯稽核...")
         result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY)
         
         progress_bar.progress(100)
