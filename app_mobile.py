@@ -62,7 +62,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (數量邏輯微調版) ---
+# --- 5. 核心函數：Gemini 神之腦 (邏輯整合版) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -77,17 +77,21 @@ def audit_with_gemini(extracted_data_list, api_key):
     你是一位極度嚴謹的中鋼機械品管稽核員。
     請依據 Azure OCR 提取的表格文字進行稽核。
 
+    ### ⛔️ 極重要排除指令 (Exclusion Rules)：
+    - **完全無視簽名欄位**：請忽略頁面底部的主管/承辦人簽名、簽核日期。
+    - 不論是否有簽名、日期是否正確、是否為 `0月`，**一律不檢查、不回報**。
+    - 請將注意力 100% 集中在「數據表格」與「表頭資訊」。
+
     ### 0. 核心任務與數據清洗：
     - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`, `E30`)。
     - **分軌識別**：判斷該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
     - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
-    ### 1. 數量一致性檢查 (Quantity Logic Split) - 【微調】：
+    ### 1. 數量一致性檢查 (Quantity Logic Split)：
     - **優先檢查：特例項目**
       - **熱處理 (Heat Treatment)**：
         - 規則：**忽略** 項目名稱中的數量要求 (PC)。
         - 判定：只要該欄位有填寫數據 (通常為重量 KG)，且筆數 >= 1，即視為 **PASS**。
-        - 僅在完全無數據時判定 FAIL。
     
     - **情境 A：軸頸 (Journal)**
       - 適用：項目名稱含「軸頸」或「軸位」。
@@ -114,7 +118,6 @@ def audit_with_gemini(extracted_data_list, api_key):
     #### B. 【軸頸 (Journal)】未再生/車修：
     - **步驟 1 (智慧歸類)**：若有多個規格 (如 157, 127)，請計算實測值與各規格的距離，選出 **數值最接近** 的那個當作「目標規格」。
     - **步驟 2 (數值比對)**：實測值 必須 **<= (小於等於)** 目標規格。
-      - 範例：目標 127，實測 126 -> **PASS** (因為 126 <= 127)。
     - **步驟 3 (格式檢查)**：實測值必須為 **整數**。若有小數點 -> **FAIL** (軸頸未再生不可完工)。
 
     #### C. 銲補 (Welding) (通用)：
@@ -127,7 +130,7 @@ def audit_with_gemini(extracted_data_list, api_key):
     ### 4. 全域流程防呆 (Process Integrity)：
     - **前向檢查**：本體未再生已完工(小數) -> 不可出現在後續。
     - **後向檢查**：出現在銲補/再生 -> 前面必須有未再生紀錄。
-    - **跨頁一致性**：工令、日期需一致。
+    - **跨頁一致性**：工令、日期需一致 (日期格式 `YYY.MM.DD` 允許空格)。
 
     ### 輸出格式 (JSON Only)：
     {
@@ -242,6 +245,7 @@ if st.session_state.photo_gallery:
                 
                 for item in issues:
                     with st.container(border=True):
+                        # 標題
                         col_head1, col_head2 = st.columns([3, 1])
                         page_str = str(item.get('page', '?'))
                         col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
