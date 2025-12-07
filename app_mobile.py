@@ -9,6 +9,18 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
+# --- CSS 樣式：加大按鈕 ---
+st.markdown("""
+<style>
+div.stButton > button {
+    height: 80px;          /* 高度加倍 */
+    font-size: 20px;       /* 字體加大 */
+    font-weight: bold;     /* 字體加粗 */
+    border-radius: 10px;   /* 圓角 */
+}
+</style>
+""", unsafe_allow_html=True)
+
 # --- 2. 秘密金鑰讀取 ---
 try:
     DOC_ENDPOINT = st.secrets["DOC_ENDPOINT"]
@@ -62,7 +74,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (邏輯整合版) ---
+# --- 5. 核心函數：Gemini 神之腦 (修復尺寸邏輯版) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -127,9 +139,13 @@ def audit_with_gemini(extracted_data_list, api_key):
     - 數值：**包含於 (Inclusive)** 上下限之間。
     - 格式：忽略空格後，必須精確到小數點後兩位。
 
-    ### 4. 全域流程防呆 (Process Integrity)：
+    ### 4. 全域流程防呆 (Process Integrity) - 【補回尺寸邏輯】：
     - **前向檢查**：本體未再生已完工(小數) -> 不可出現在後續。
     - **後向檢查**：出現在銲補/再生 -> 前面必須有未再生紀錄。
+    - **尺寸合理性檢查 (Dimension Continuity)**：
+      - 檢查同一編號在 未再生 -> 銲補 -> 再生 過程中的尺寸變化。
+      - 基準：各階段尺寸應在合理範圍內 (例如 350 $\pm$ 20mm)。
+      - 若出現劇烈跳動 (如 350 -> 200) -> **FAIL (尺寸異常：數值不連貫)**。
     - **跨頁一致性**：工令、日期需一致 (日期格式 `YYY.MM.DD` 允許空格)。
 
     ### 輸出格式 (JSON Only)：
@@ -245,7 +261,6 @@ if st.session_state.photo_gallery:
                 
                 for item in issues:
                     with st.container(border=True):
-                        # 標題
                         col_head1, col_head2 = st.columns([3, 1])
                         page_str = str(item.get('page', '?'))
                         col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
