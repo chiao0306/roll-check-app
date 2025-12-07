@@ -4,6 +4,7 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult
 import google.generativeai as genai
 import json
+import time  # <--- 新增時間模組
 
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
@@ -28,7 +29,6 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
     
-    # 呼叫 Azure
     poller = client.begin_analyze_document(
         "prebuilt-layout", 
         file_content,
@@ -37,7 +37,6 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
-    # A. 提取表格
     if result.tables:
         for idx, table in enumerate(result.tables):
             page_num = "Unknown"
@@ -56,16 +55,10 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
-    # B. 提取表頭 (前 300 字)
     header_snippet = result.content[:300] if result.content else ""
-    
-    # C. 提取頁尾/簽核區 (後 300 字) - 新增
-    footer_snippet = result.content[-300:] if result.content and len(result.content) > 300 else ""
-    
-    # 回傳結構包含頁尾，供簽核日期檢查
-    return markdown_output, f"--- Header ---\n{header_snippet}\n--- Footer ---\n{footer_snippet}"
+    return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (日期核對升級) ---
+# --- 5. 核心函數：Gemini 神之腦 ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -73,7 +66,7 @@ def audit_with_gemini(extracted_data_list, api_key):
     combined_input = "以下是各頁資料：\n"
     for data in extracted_data_list:
         combined_input += f"\n=== Page {data['page']} ===\n"
-        combined_input += f"{data['text_snippets']}\n"
+        combined_input += f"【頁首文字片段】:\n{data['header_text']}\n"
         combined_input += f"【表格數據】:\n{data['table']}\n"
 
     system_prompt = """
@@ -82,37 +75,29 @@ def audit_with_gemini(extracted_data_list, api_key):
 
     ### 0. 核心任務與數據清洗：
     - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`)。
-    - **頁碼追蹤 (Page Tracking)**：若異常涉及跨頁流程，請在 `page` 欄位列出所有相關頁碼 (如 "1, 2")。
-    - **數值容錯**：遇到數字間有空格 (如 `341 . 12`)，請忽略空格視為正常數值 `341.12`。
+    - **頁碼追蹤**：異常若涉及跨頁，請列出頁碼 (如 "1, 2")。
+    - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
-    ### 1. 跨頁一致性與日期核對 (Header & Signature)：
-    - **表頭檢查**：
-      - 工令編號、預定交貨日期、實際交貨日期：所有頁面必須相同。
-      - 日期格式：`YYY.MM.DD` (允許空格)。
-    - **簽核日期核對 (Signature Date Sync)** - 【新增】：
-      - 請檢查頁尾或簽核欄位是否有填寫日期。
-      - **規則**：若有簽核日期，該日期必須與表頭的 **「實際交貨日期」** 完全一致。
-      - **容錯**：`114.10.22` 與 `114年10月22日` 視為相同。
-      - **異常**：若日期不符或日期無效 (如 `0月`) -> **FAIL**。
-      - (若簽核欄空白則忽略，不需檢查)。
+    ### 1. 跨頁一致性檢查 (Header Consistency)：
+    - **檢查項目**：工令編號、預定交貨日期、實際交貨日期。
+    - **規則**：所有頁面的上述欄位內容必須「完全相同」。
+    - **日期格式**：`YYY.MM.DD` (允許空格)，`/` 或 `-` 為 FAIL。
 
     ### 2. 製程判定邏輯 (分軌制)：
 
     #### A. 【本體 (Body)】未再生/車修：
     - **規格解析**：忽略「每次車修Xmm」，只看「至 Ymm」。取最大值為 Max_Spec。
     - **邏輯分流**：
-      1. **實測值為「整數」** (未完工)：
-         - 規則：實測值 **<=** 規格值。
-      2. **實測值有「小數點」** (已完工)：
+      1. **整數** (未完工)：實測值 **<=** 規格值。
+      2. **小數** (已完工)：
          - 規則：實測值 **>=** 規格值。
          - 格式：忽略空格後，必須精確到小數點後兩位 (`#.##`)。
          - **標記**：此編號狀態為「本體已完工」。
 
     #### B. 【軸頸 (Journal)】未再生/車修：
-    - **邏輯**：
-       - 規格比對：智慧歸類。
-       - **強制規則**：實測值必須為 **整數**。
-       - 若出現小數點 -> **FAIL** (軸頸未再生不可完工)。
+    - 規格比對：智慧歸類 (多重規格)。
+    - **強制規則**：實測值必須為 **整數**。
+    - 若出現小數點 -> **FAIL** (軸頸未再生不可完工)。
 
     #### C. 銲補 (Welding) (通用)：
     - 規則：實測值 **>=** 規格。
@@ -122,7 +107,7 @@ def audit_with_gemini(extracted_data_list, api_key):
     - 格式：忽略空格後，必須精確到小數點後兩位。
 
     ### 3. 全域流程防呆 (Global Process Integrity)：
-    - **前向檢查**：若某編號在「本體未再生」已標記為「已完工」(有小數點)，則 **不可出現** 在「本體銲補」或「本體再生車修」。
+    - **前向檢查**：若某編號在「本體未再生」已標記為「已完工」，則 **不可出現** 在「本體銲補」或「本體再生車修」。
     - **後向檢查**：若某編號出現在「銲補」或「再生車修」，則 **必須出現** 在該部位的「未再生」階段。
     - **尺寸合理性**：檢查同一編號在各階段尺寸是否劇烈跳動 (如 350 -> 200 -> FAIL)。
 
@@ -137,9 +122,9 @@ def audit_with_gemini(extracted_data_list, api_key):
       "summary": "總結",
       "issues": [
          {
-           "page": "頁碼 (字串，如 '1' 或 '1, 3')",
+           "page": "頁碼",
            "item": "項目名稱",
-           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 日期不符",
+           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 日期格式錯誤",
            "spec_logic": "判定標準",
            "common_reason": "錯誤原因概述",
            "failures": [
@@ -193,7 +178,10 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
-    if st.button("🚀 開始分析 (日期核對版)", type="primary", use_container_width=True):
+    if st.button("🚀 開始分析", type="primary", use_container_width=True):
+        
+        # --- 計時開始 ---
+        start_time = time.time()
         
         status = st.empty()
         progress_bar = st.progress(0)
@@ -210,30 +198,35 @@ if st.session_state.photo_gallery:
                 extracted_data_list.append({
                     "page": i + 1,
                     "table": table_md,
-                    "text_snippets": text_snippets 
+                    "header_text": text_snippets 
                 })
             except Exception as e:
                 st.error(f"第 {i+1} 頁讀取失敗: {e}")
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text(f"Gemini 2.5 Pro 正在進行邏輯與日期核對...")
+        status.text(f"Gemini 2.5 Pro 正在進行邏輯稽核...")
         result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY)
         
         progress_bar.progress(100)
         status.text("完成！")
+        
+        # --- 計時結束 ---
+        end_time = time.time()
+        elapsed_time = end_time - start_time
 
-        # 3. 顯示結果
+        # 3. 顯示結果 (含計時)
         try:
             result = json.loads(result_str)
             if isinstance(result, list): result = result[0] if len(result) > 0 else {}
             
-            st.success(f"工令: {result.get('job_no', 'Unknown')}")
+            # 在成功訊息旁邊顯示耗時
+            st.success(f"工令: {result.get('job_no', 'Unknown')} | ⏱️ 耗時: {elapsed_time:.1f} 秒")
             
             issues = result.get('issues', [])
             if not issues:
                 st.balloons()
-                st.success("✅ 全數合格！")
+                st.info("✅ 全數合格！數據邏輯與流程皆無異常。")
             else:
                 st.error(f"發現 {len(issues)} 類異常項目")
                 
@@ -241,8 +234,6 @@ if st.session_state.photo_gallery:
                     with st.container(border=True):
                         # 標題
                         col_head1, col_head2 = st.columns([3, 1])
-                        
-                        # 標題顯示：[頁碼] 項目
                         page_str = str(item.get('page', '?'))
                         col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
                         
