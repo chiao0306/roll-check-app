@@ -23,12 +23,12 @@ if 'photo_gallery' not in st.session_state:
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
-# --- 4. 核心函數：Azure 神之眼 (穩定單頁版) ---
+# --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
     
-    # 呼叫 Azure (循序執行，保證最穩定)
+    # 呼叫 Azure
     poller = client.begin_analyze_document(
         "prebuilt-layout", 
         file_content,
@@ -56,15 +56,14 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
-    # B. 提取表頭 (只取前 300 字)
+    # B. 提取表頭 (前 300 字)
     header_snippet = result.content[:300] if result.content else ""
     
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (邏輯稽核) ---
+# --- 5. 核心函數：Gemini 神之腦 (邏輯更新) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
-    # 鎖定最強模型
     model = genai.GenerativeModel("models/gemini-2.5-pro")
     
     combined_input = "以下是各頁資料：\n"
@@ -79,25 +78,26 @@ def audit_with_gemini(extracted_data_list, api_key):
     請執行以下 **全方位邏輯稽核**：
 
     ### 0. 數據處理原則：
-    - **忠實呈現**：請依據 OCR 提取的原始文字進行判斷，**不要**自動修正 OCR 的錯誤 (例如：若看到 `129.` 就是 `129.`，不要自作聰明改成 `129`)。
-    - 若數據格式異常導致無法判讀，直接標記為異常。
+    - **忠實呈現**：請依據 OCR 提取的原始文字進行判斷，**不要**自動修正 OCR 的錯誤 (如 `129.` 視為異常，不要改成 `129`)。
 
     ### 1. 跨頁一致性與格式檢查 (Header Consistency)：
     - **來源**：請從「頁首文字片段」中尋找。
     - **目標**：1.工令編號 2.預定交貨日期 3.實際交貨日期。
     - **規則**：
-      - 所有頁面的上述三個欄位內容必須「完全相同」。不同 -> **FAIL**。
-      - 日期格式必須為 `YYY.MM.DD` (如 `114.10.30`)。格式錯誤 -> **FAIL**。
+      - 所有頁面的上述三個欄位內容必須「實質相同」。不同 -> **FAIL**。
+      - **日期格式寬容度**：格式原則為 `YYY.MM.DD`。
+        - 若包含空格 (如 `114 . 10 . 30`)，視為 **PASS**。
+        - 若分隔符為 `/` 或 `-`，視為 **FAIL**。
+        - 跨頁比對時，`114.10.30` 與 `114 . 10 . 30` 視為相同日期。
 
     ### 2. 製程判定邏輯 (Process Logic)：
     - **未再生/車修**：實測值 **<= (小於或等於)** 規格值。
     - **銲補 (Welding)**：實測值 **>= (大於或等於)** 規格值。
     - **再生車修 (Finish Turning)**：
        - **數值檢查**：實測值必須 **包含於 (Inclusive)** 上下限之間。
-       - **格式檢查 (新增)**：實測值必須精確到 **小數點後兩位**。
+       - **格式檢查**：實測值必須精確到 **小數點後兩位**。
          - `101.66` -> PASS
          - `101.6` -> **FAIL (小數點位數不足)**
-         - `101` -> **FAIL (小數點位數不足)**
 
     ### 3. 數量一致性檢查 (Quantity Check)：
     - **步驟**：讀取項目名稱中的數量要求 `(10PC)` -> 清點該列實測數據個數 -> 比對。
@@ -107,6 +107,9 @@ def audit_with_gemini(extracted_data_list, api_key):
     ### 4. 多重規格智慧歸類 (Multi-Spec Matching)：
     - 若項目有多種尺寸規格（如：一、157mm；二、127mm）。
     - 對每個實測值，自動判斷它接近哪一個規格，就套用該規格的判定標準。
+
+    ### 5. 數學比對嚴謹度：
+    - 進行 **小數點後兩位** 的精確比對。
 
     ### 輸出格式 (JSON Only)：
     {
