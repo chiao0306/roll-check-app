@@ -10,21 +10,24 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：只加大 Primary 按鈕 ---
+# --- CSS 樣式：加大 Primary 按鈕 + 緊湊排版 ---
 st.markdown("""
 <style>
-/* 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
+/* 加大開始分析按鈕 */
 button[kind="primary"] {
-    height: 80px;          
+    height: 70px;          
     font-size: 20px;       
     font-weight: bold;     
-    border-radius: 10px;   
-    margin-top: 20px;
-    margin-bottom: 20px;
+    border-radius: 10px;
 }
-/* 微調圖片容器，讓它在手機上不要太擠 */
+/* 讓圖片欄位間距變緊湊 */
 div[data-testid="column"] {
-    padding: 2px;
+    padding: 1px;
+}
+/* 調整區塊間距 */
+.block-container {
+    padding-top: 1rem;
+    padding-bottom: 5rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -78,7 +81,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (Prompt 保持不動) ---
+# --- 5. 核心函數：Gemini 神之腦 (保持原樣) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -180,14 +183,13 @@ def audit_with_gemini(extracted_data_list, api_key):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 6. 手機版 UI ---
+# --- 6. 手機版 UI (按鈕置頂 + 緊湊排列) ---
 st.title("🏭 現場稽核助手")
 
 # A. 檔案上傳區
 with st.container(border=True):
-    st.subheader("📂 新增頁面")
     uploaded_files = st.file_uploader(
-        "點擊上傳 (手機可選直接拍照)", 
+        "📂 新增頁面 (點擊拍照或上傳)", 
         type=['jpg', 'png', 'jpeg'], 
         accept_multiple_files=True,
         key=f"uploader_{st.session_state.uploader_key}"
@@ -196,45 +198,32 @@ with st.container(border=True):
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
         st.session_state.uploader_key += 1
-        
-        # 【自動捲動 JavaScript】
-        # 嘗試捲動到頁面最底部，讓使用者看到新增的照片和開始按鈕
-        components.html(
-            """
-            <script>
-                var docBody = window.parent.document.body;
-                window.parent.scrollTo(0, docBody.scrollHeight);
-            </script>
-            """,
-            height=0
-        )
         st.rerun()
 
-# B. 預覽與管理區
+# B. 操作與預覽區
 if st.session_state.photo_gallery:
-    st.divider()
-    st.write(f"📊 已累積 **{len(st.session_state.photo_gallery)}** 頁文件")
     
-    # 【UI 修改】使用三欄位直接顯示圖片
-    cols = st.columns(3)
-    for idx, img in enumerate(st.session_state.photo_gallery):
-        with cols[idx % 3]:
-            # 直接顯示圖片 (點擊可放大)，不使用 Expander
-            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
-            
-            # 刪除按鈕 (紅色小按鈕)
-            if st.button("❌", key=f"del_{idx}"):
-                st.session_state.photo_gallery.pop(idx)
-                st.rerun()
+    # 顯示目前頁數
+    st.caption(f"已累積 {len(st.session_state.photo_gallery)} 頁文件")
 
-    # C. 執行按鈕
-    st.divider()
+    # --- 操作按鈕區 (置頂) ---
+    col_btn1, col_btn2 = st.columns([3, 1])
     
-    # 這裡使用 type="primary"，會被 CSS 放大
-    if st.button("🚀 開始分析", type="primary", use_container_width=True):
-        
+    with col_btn1:
+        start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
+    with col_btn2:
+        # 清除按鈕稍微往下移一點點，對齊大按鈕
+        st.write("") 
+        clear_btn = st.button("🗑️", help="清除所有", use_container_width=True)
+
+    # 清除邏輯
+    if clear_btn:
+        st.session_state.photo_gallery = []
+        st.rerun()
+
+    # --- 執行分析邏輯 ---
+    if start_btn:
         start_time = time.time()
-        
         status = st.empty()
         progress_bar = st.progress(0)
         
@@ -282,7 +271,6 @@ if st.session_state.photo_gallery:
                 
                 for item in issues:
                     with st.container(border=True):
-                        # 標題
                         col_head1, col_head2 = st.columns([3, 1])
                         page_str = str(item.get('page', '?'))
                         col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
@@ -308,10 +296,19 @@ if st.session_state.photo_gallery:
             st.error("分析錯誤")
             st.code(result_str)
             st.write(e)
-            
-    if st.button("🗑️ 清除所有照片"):
-        st.session_state.photo_gallery = []
-        st.rerun()
+
+    # --- 圖片縮圖區 (放在按鈕和結果的下方) ---
+    st.divider()
+    st.caption("已拍攝照片：")
+    
+    # 改為 4 欄，更緊湊
+    cols = st.columns(4)
+    for idx, img in enumerate(st.session_state.photo_gallery):
+        with cols[idx % 4]:
+            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
+            if st.button("❌", key=f"del_{idx}"):
+                st.session_state.photo_gallery.pop(idx)
+                st.rerun()
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
