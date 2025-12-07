@@ -23,7 +23,24 @@ if 'photo_gallery' not in st.session_state:
 if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
-# --- 4. 核心函數 (Azure OCR) ---
+# --- 4. 側邊欄：模型選擇器 (2.5 對決) ---
+with st.sidebar:
+    st.header("⚙️ 設定")
+    model_option = st.radio(
+        "選擇 AI 大腦:",
+        ("Gemini 2.5 Flash (極速)", "Gemini 2.5 Pro (精準)"),
+        index=1, # 預設選 Pro (比較保險)，想快可以手動切 Flash
+        help="2.5 Flash 速度極快；2.5 Pro 邏輯最強。"
+    )
+    
+    if "Flash" in model_option:
+        target_model = "models/gemini-2.5-flash"
+    else:
+        target_model = "models/gemini-2.5-pro"
+        
+    st.info(f"目前使用: `{target_model}`")
+
+# --- 5. 核心函數 (Azure OCR) ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
     file_content = file_obj.getvalue()
@@ -31,7 +48,6 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
-    # 提取表格
     if result.tables:
         for idx, table in enumerate(result.tables):
             page_num = "Unknown"
@@ -49,17 +65,15 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     max_col = max(rows[r].keys())
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
-    
-    # 同時回傳全文 (Raw Text)，確保表頭資訊不會因為沒被識別為表格而遺漏
     return markdown_output, result.content
 
-# --- 5. 核心函數 (Gemini Logic - 含表頭檢查) ---
-def audit_with_gemini(extracted_data_list, api_key):
+# --- 6. 核心函數 (Gemini Logic) ---
+def audit_with_gemini(extracted_data_list, api_key, model_name):
     genai.configure(api_key=api_key)
-    # 鎖定使用最強模型
-    model = genai.GenerativeModel("models/gemini-2.5-pro")
+    # 使用傳入的模型名稱 (2.5 Flash 或 2.5 Pro)
+    model = genai.GenerativeModel(model_name)
     
-    # 組合所有頁面的資料給 AI
+    # 組合資料
     combined_input = "以下是每一頁的 OCR 資料：\n"
     for idx, data in enumerate(extracted_data_list):
         combined_input += f"\n--- 第 {idx + 1} 頁資料 ---\n"
@@ -72,22 +86,13 @@ def audit_with_gemini(extracted_data_list, api_key):
     
     請執行以下 **全方位邏輯稽核**：
 
-    ### 0. 跨頁一致性與格式檢查 (Header Consistency) - 【新增規則】：
-    - **目標欄位**：請在每一頁中找出以下資訊：
+    ### 0. 跨頁一致性與格式檢查 (Header Consistency)：
+    - **目標欄位**：
       1. **工令編號** (Job No)
       2. **預定交貨日期** (Scheduled Delivery Date)
       3. **實際交貨日期** (Actual Delivery Date)
-    
-    - **一致性檢查**：
-      - 所有頁面的「工令編號」必須完全相同。
-      - 所有頁面的「預定交貨日期」必須完全相同。
-      - 所有頁面的「實際交貨日期」必須完全相同。
-      - 若發現不同，請回報 **FAIL (跨頁資訊不符)**，並註明是哪一頁不同。
-
-    - **日期格式檢查**：
-      - 日期必須符合 `YYY.MM.DD` 格式 (例如 `114.10.30`)。
-      - `YYY` 通常為民國年 (3碼)。
-      - 若格式錯誤 (如 `114/10/30` 或 `2025.10.30`) -> **FAIL (日期格式錯誤)**。
+    - **一致性檢查**：所有頁面的上述三個欄位內容必須「完全相同」。若不同 -> **FAIL**。
+    - **日期格式檢查**：必須符合 `YYY.MM.DD` (如 `114.10.30`)。格式錯誤 -> **FAIL**。
 
     ### 1. 製程判定邏輯 (Process Logic)：
     - **未再生/車修**：實測值 **<= (小於或等於)** 規格值。
@@ -108,13 +113,13 @@ def audit_with_gemini(extracted_data_list, api_key):
 
     ### 輸出格式 (JSON Only)：
     {
-      "job_no": "工令編號 (以第一頁為準)",
+      "job_no": "工令編號",
       "summary": "總結發現幾個異常",
       "issues": [
          {
            "page": 1,
-           "item": "項目名稱 或 表頭欄位",
-           "spec_logic": "判定標準 (例如: 格式應為 YYY.MM.DD)",
+           "item": "項目名稱",
+           "spec_logic": "判定標準",
            "measured": "實測數據",
            "issue_type": "數值超規 / 數量不符 / 跨頁資訊不符 / 日期格式錯誤",
            "reason": "詳細說明"
@@ -132,7 +137,7 @@ def audit_with_gemini(extracted_data_list, api_key):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 6. 手機版 UI ---
+# --- 7. 手機版 UI ---
 st.title("🏭 現場稽核助手")
 
 # A. 檔案上傳區
@@ -168,13 +173,16 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
-    if st.button("🚀 開始分析 (Gemini 2.5 Pro)", type="primary", use_container_width=True):
+    # 動態顯示按鈕文字
+    btn_text = f"🚀 開始分析 ({'極速' if 'Flash' in model_option else '精準'})"
+    
+    if st.button(btn_text, type="primary", use_container_width=True):
         
         progress_bar = st.progress(0)
         status = st.empty()
         
         # 1. OCR
-        extracted_data_list = [] # 儲存每一頁的解析結果
+        extracted_data_list = []
         total_imgs = len(st.session_state.photo_gallery)
         
         for i, img in enumerate(st.session_state.photo_gallery):
@@ -191,8 +199,8 @@ if st.session_state.photo_gallery:
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text(f"Gemini 2.5 Pro 正在進行邏輯稽核 (含表頭檢查)...")
-        result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY)
+        status.text(f"{model_option} 正在進行邏輯稽核...")
+        result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY, target_model)
         
         progress_bar.progress(100)
         status.text("完成！")
