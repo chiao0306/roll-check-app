@@ -59,17 +59,21 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     # B. 提取表頭 (前 300 字)
     header_snippet = result.content[:300] if result.content else ""
     
-    return markdown_output, header_snippet
+    # C. 提取頁尾/簽核區 (後 300 字) - 新增
+    footer_snippet = result.content[-300:] if result.content and len(result.content) > 300 else ""
+    
+    # 回傳結構包含頁尾，供簽核日期檢查
+    return markdown_output, f"--- Header ---\n{header_snippet}\n--- Footer ---\n{footer_snippet}"
 
-# --- 5. 核心函數：Gemini 神之腦 (數值容錯更新) ---
+# --- 5. 核心函數：Gemini 神之腦 (日期核對升級) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
     
     combined_input = "以下是各頁資料：\n"
     for data in extracted_data_list:
-        combined_input += f"\n--- Page {data['page']} ---\n"
-        combined_input += f"【頁首文字片段】:\n{data['header_text']}\n"
+        combined_input += f"\n=== Page {data['page']} ===\n"
+        combined_input += f"{data['text_snippets']}\n"
         combined_input += f"【表格數據】:\n{data['table']}\n"
 
     system_prompt = """
@@ -78,15 +82,19 @@ def audit_with_gemini(extracted_data_list, api_key):
 
     ### 0. 核心任務與數據清洗：
     - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`)。
-    - **分軌識別**：判斷該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
-    - **數值格式容錯 (最重要的修正)**：
-      - Azure OCR 經常會在數字或小數點間插入空格 (例如 `341 . 12` 或 `349 . 94`)。
-      - **規則**：遇到此類狀況，請**自動忽略空格**，視為 `341.12` 或 `349.94` 進行判定。
-      - **不要**因此判定為格式錯誤，只要忽略空格後符合 `#.##` 格式即為 PASS。
+    - **頁碼追蹤 (Page Tracking)**：若異常涉及跨頁流程，請在 `page` 欄位列出所有相關頁碼 (如 "1, 2")。
+    - **數值容錯**：遇到數字間有空格 (如 `341 . 12`)，請忽略空格視為正常數值 `341.12`。
 
-    ### 1. 跨頁一致性與格式檢查：
-    - 工令/日期：所有頁面必須相同。
-    - 日期格式：`YYY.MM.DD` (允許空格)，`/` 或 `-` 為 FAIL。
+    ### 1. 跨頁一致性與日期核對 (Header & Signature)：
+    - **表頭檢查**：
+      - 工令編號、預定交貨日期、實際交貨日期：所有頁面必須相同。
+      - 日期格式：`YYY.MM.DD` (允許空格)。
+    - **簽核日期核對 (Signature Date Sync)** - 【新增】：
+      - 請檢查頁尾或簽核欄位是否有填寫日期。
+      - **規則**：若有簽核日期，該日期必須與表頭的 **「實際交貨日期」** 完全一致。
+      - **容錯**：`114.10.22` 與 `114年10月22日` 視為相同。
+      - **異常**：若日期不符或日期無效 (如 `0月`) -> **FAIL**。
+      - (若簽核欄空白則忽略，不需檢查)。
 
     ### 2. 製程判定邏輯 (分軌制)：
 
@@ -129,9 +137,9 @@ def audit_with_gemini(extracted_data_list, api_key):
       "summary": "總結",
       "issues": [
          {
-           "page": 1,
+           "page": "頁碼 (字串，如 '1' 或 '1, 3')",
            "item": "項目名稱",
-           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤",
+           "issue_type": "數值超規 / 數量不符 / 流程異常 / 尺寸異常 / 格式錯誤 / 日期不符",
            "spec_logic": "判定標準",
            "common_reason": "錯誤原因概述",
            "failures": [
@@ -185,7 +193,7 @@ if st.session_state.photo_gallery:
     # C. 執行按鈕
     st.divider()
     
-    if st.button("🚀 開始分析 (數值容錯版)", type="primary", use_container_width=True):
+    if st.button("🚀 開始分析 (日期核對版)", type="primary", use_container_width=True):
         
         status = st.empty()
         progress_bar = st.progress(0)
@@ -198,18 +206,18 @@ if st.session_state.photo_gallery:
             status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
             img.seek(0)
             try:
-                table_md, raw_txt = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
+                table_md, text_snippets = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
                 extracted_data_list.append({
                     "page": i + 1,
                     "table": table_md,
-                    "header_text": raw_txt 
+                    "text_snippets": text_snippets 
                 })
             except Exception as e:
                 st.error(f"第 {i+1} 頁讀取失敗: {e}")
             progress_bar.progress((i + 1) / (total_imgs + 1))
 
         # 2. Gemini
-        status.text(f"Gemini 2.5 Pro 正在進行全域流程稽核...")
+        status.text(f"Gemini 2.5 Pro 正在進行邏輯與日期核對...")
         result_str = audit_with_gemini(extracted_data_list, GEMINI_KEY)
         
         progress_bar.progress(100)
@@ -233,12 +241,14 @@ if st.session_state.photo_gallery:
                     with st.container(border=True):
                         # 標題
                         col_head1, col_head2 = st.columns([3, 1])
-                        col_head1.markdown(f"**{item.get('item')}**")
                         
-                        # 錯誤類型與顏色
+                        # 標題顯示：[頁碼] 項目
+                        page_str = str(item.get('page', '?'))
+                        col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
+                        
                         itype = item.get('issue_type', '異常')
-                        if "流程" in itype or "尺寸" in itype:
-                            col_head2.error(f"🛑 {itype}") 
+                        if "流程" in itype or "尺寸" in itype or "日期" in itype:
+                            col_head2.error(f"🛑 {itype}")
                         else:
                             col_head2.warning(f"⚠️ {itype}")
                         
