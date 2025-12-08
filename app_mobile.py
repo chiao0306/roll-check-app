@@ -158,7 +158,10 @@ def audit_with_gemini(extracted_data_list, api_key):
     - 規則：實測值 **>=** 規格。
 
     #### D. 再生車修 (Finish) (通用)：
-    - 數值：**包含於 (Inclusive)** 上下限之間。
+    - 多重規格判定：若項目列出多個規格區間 (如：一、160mm...；二、130mm...)，採「符合任一即合格」原則。
+      - 請將實測值分別與各規格區間比對。
+      - 若落入 任意一個 規格的公差範圍內，即判定為 PASS。
+    - 數值：包含於 (Inclusive) 上下限之間。
     - 格式：忽略空格後，必須精確到小數點後兩位。
 
     ### 4. 全域流程防呆 (Process Integrity) - 【新增研磨】：
@@ -335,5 +338,6 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
 
 
