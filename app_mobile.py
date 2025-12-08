@@ -7,26 +7,37 @@ import google.generativeai as genai
 import json
 import time
 
-# --- 1. 頁面設定 ---
+# --- 1. 頁面設定 (瀏覽器標籤名稱) ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：加大 Primary 按鈕 + 緊湊排版 ---
+# --- CSS 樣式：按鈕 + 標題優化 ---
 st.markdown("""
 <style>
-/* 加大開始分析按鈕 */
+/* 1. 加大開始分析按鈕 */
 button[kind="primary"] {
-    height: 70px;          
+    height: 80px;          
     font-size: 20px;       
     font-weight: bold;     
-    border-radius: 10px;
+    border-radius: 10px;   
+    margin-top: 20px;
+    margin-bottom: 20px;
 }
-/* 讓圖片欄位間距變緊湊 */
+
+/* 2. 讓圖片欄位間距變緊湊 */
 div[data-testid="column"] {
-    padding: 1px;
+    padding: 2px;
 }
-/* 調整區塊間距 */
+
+/* 3. 調整標題 (h1) 大小與位置，避免被切掉 */
+h1 {
+    font-size: 1.8rem !important; /* 字體縮小 (原預設約 2.5rem) */
+    padding-top: 1rem !important; /* 增加頂部留白 */
+    margin-bottom: 0rem !important;
+}
+
+/* 4. 調整整體頁面頂部間距 */
 .block-container {
-    padding-top: 1rem;
+    padding-top: 2rem !important;
     padding-bottom: 5rem;
 }
 </style>
@@ -81,7 +92,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (保持原樣) ---
+# --- 5. 核心函數：Gemini 神之腦 ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -92,6 +103,7 @@ def audit_with_gemini(extracted_data_list, api_key):
         combined_input += f"【頁首文字片段】:\n{data['header_text']}\n"
         combined_input += f"【表格數據】:\n{data['table']}\n"
 
+    # System Prompt 完全保持原樣
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
     請依據 Azure OCR 提取的表格文字進行稽核。
@@ -183,8 +195,9 @@ def audit_with_gemini(extracted_data_list, api_key):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# --- 6. 手機版 UI (按鈕置頂 + 緊湊排列) ---
-st.title("🏭 現場稽核助手")
+# --- 6. 手機版 UI ---
+# 【這裡就是修改標題文字的地方】
+st.title("🏭 中機交貨單稽核") 
 
 # A. 檔案上傳區
 with st.container(border=True):
@@ -198,12 +211,22 @@ with st.container(border=True):
         for f in uploaded_files:
             st.session_state.photo_gallery.append(f)
         st.session_state.uploader_key += 1
+        
+        # 自動捲動
+        components.html(
+            """
+            <script>
+                var docBody = window.parent.document.body;
+                window.parent.scrollTo(0, docBody.scrollHeight);
+            </script>
+            """,
+            height=0
+        )
         st.rerun()
 
-# B. 操作與預覽區
+# B. 預覽與管理區
 if st.session_state.photo_gallery:
     
-    # 顯示目前頁數
     st.caption(f"已累積 {len(st.session_state.photo_gallery)} 頁文件")
 
     # --- 操作按鈕區 (置頂) ---
@@ -212,11 +235,9 @@ if st.session_state.photo_gallery:
     with col_btn1:
         start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
     with col_btn2:
-        # 清除按鈕稍微往下移一點點，對齊大按鈕
         st.write("") 
-        clear_btn = st.button("清除照片🗑️", help="清除所有", use_container_width=True)
+        clear_btn = st.button("🗑️", help="清除所有", use_container_width=True)
 
-    # 清除邏輯
     if clear_btn:
         st.session_state.photo_gallery = []
         st.rerun()
@@ -297,11 +318,10 @@ if st.session_state.photo_gallery:
             st.code(result_str)
             st.write(e)
 
-    # --- 圖片縮圖區 (放在按鈕和結果的下方) ---
+    # --- 圖片縮圖區 ---
     st.divider()
     st.caption("已拍攝照片：")
     
-    # 改為 4 欄，更緊湊
     cols = st.columns(4)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
@@ -312,4 +332,3 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
-
