@@ -79,7 +79,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 (Prompt 保持不動) ---
+# --- 5. 核心函數：Gemini 神之腦 ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -221,12 +221,10 @@ if st.session_state.photo_gallery:
     col_btn1, col_btn2 = st.columns([3, 1])
     
     with col_btn1:
-        # 修改：使用 width="stretch" 取代 use_container_width=True
-        start_btn = st.button("🚀 開始分析", type="primary", key="start_btn", help="點擊開始分析", width="stretch")
+        start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
     with col_btn2:
         st.write("") 
-        # 修改：使用 width="stretch" 取代 use_container_width=True
-        clear_btn = st.button("🗑️", help="清除所有", key="clear_btn", width="stretch")
+        clear_btn = st.button("清除照片🗑️", help="清除所有", use_container_width=True)
 
     if clear_btn:
         st.session_state.photo_gallery = []
@@ -299,8 +297,7 @@ if st.session_state.photo_gallery:
                         failures = item.get('failures', [])
                         if failures:
                             table_data = [{"滾輪編號": f.get('id', '未知'), "實測值": f.get('val', 'N/A')} for f in failures]
-                            # 修改：使用 width="stretch" 取代 use_container_width=True
-                            st.dataframe(table_data, width=None, hide_index=True) # width=None 讓它自適應容器，效果類似 stretch
+                            st.dataframe(table_data, use_container_width=True, hide_index=True)
                         else:
                              st.text(f"實測數據: {item.get('measured', 'N/A')}")
                             
@@ -316,13 +313,7 @@ if st.session_state.photo_gallery:
     cols = st.columns(4)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
-            # 修改：使用 width="stretch" 取代 use_container_width=True
-            # 注意：st.image 沒有 width="stretch" 這個選項，它仍然使用 use_container_width
-            # 但根據Log，我們應該嘗試修正。如果 Log 是針對所有元件，那 st.image 可能是例外
-            # 為了保險起見，我們暫時保留 st.image 的原寫法，因為它在舊版中是標準
-            # 只有 button 和 dataframe 比較容易被警告影響
             st.image(img, caption=f"P.{idx+1}", use_container_width=True)
-            
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
