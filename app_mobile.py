@@ -8,7 +8,7 @@ import json
 import time
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
+st.set_page_config(page_title="中機交貨單稽核", page_icon="🏭", layout="centered")
 
 # --- CSS 樣式：只保留按鈕加大與緊湊排版，移除可能導致跑版的邊距設定 ---
 st.markdown("""
@@ -182,7 +182,7 @@ def audit_with_gemini(extracted_data_list, api_key):
         return f"Error: {str(e)}"
 
 # --- 6. 手機版 UI ---
-st.title("🏭 中鋼機械稽核")
+st.title("🏭 中機交貨單稽核")
 
 # A. 檔案上傳區
 with st.container(border=True):
@@ -317,3 +317,4 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
