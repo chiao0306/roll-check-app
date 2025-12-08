@@ -229,10 +229,10 @@ if st.session_state.photo_gallery:
     col_btn1, col_btn2 = st.columns([3, 1])
     
     with col_btn1:
-        start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
+        start_btn = st.button("🚀 開始分析", type="primary", key="start_btn", width="stretch")
     with col_btn2:
         st.write("") 
-        clear_btn = st.button("清除照片🗑️", help="清除所有", use_container_width=True)
+        clear_btn = st.button("清除照片🗑️", help="清除所有", key="start_btn", width="stretch")
 
     if clear_btn:
         st.session_state.photo_gallery = []
@@ -305,7 +305,7 @@ if st.session_state.photo_gallery:
                         failures = item.get('failures', [])
                         if failures:
                             table_data = [{"滾輪編號": f.get('id', '未知'), "實測值": f.get('val', 'N/A')} for f in failures]
-                            st.dataframe(table_data, use_container_width=True, hide_index=True)
+                            st.dataframe(table_data, hide_index=True)
                         else:
                              st.text(f"實測數據: {item.get('measured', 'N/A')}")
                             
@@ -321,13 +321,14 @@ if st.session_state.photo_gallery:
     cols = st.columns(4)
     for idx, img in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
-            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
+            st.image(img, caption=f"P.{idx+1}")
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
 
 
 
