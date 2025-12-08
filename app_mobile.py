@@ -7,13 +7,13 @@ import google.generativeai as genai
 import json
 import time
 
-# --- 1. 頁面設定 (瀏覽器標籤名稱) ---
+# --- 1. 頁面設定 ---
 st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：按鈕 + 標題優化 ---
+# --- CSS 樣式：只保留按鈕加大與緊湊排版，移除可能導致跑版的邊距設定 ---
 st.markdown("""
 <style>
-/* 1. 加大開始分析按鈕 */
+/* 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
     height: 80px;          
     font-size: 20px;       
@@ -23,22 +23,9 @@ button[kind="primary"] {
     margin-bottom: 20px;
 }
 
-/* 2. 讓圖片欄位間距變緊湊 */
+/* 讓圖片欄位間距變緊湊 */
 div[data-testid="column"] {
     padding: 2px;
-}
-
-/* 3. 調整標題 (h1) 大小與位置，避免被切掉 */
-h1 {
-    font-size: 1.8rem !important; /* 字體縮小 (原預設約 2.5rem) */
-    padding-top: 1rem !important; /* 增加頂部留白 */
-    margin-bottom: 0rem !important;
-}
-
-/* 4. 調整整體頁面頂部間距 */
-.block-container {
-    padding-top: 2rem !important;
-    padding-bottom: 5rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -92,7 +79,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 ---
+# --- 5. 核心函數：Gemini 神之腦 (Prompt 保持完全不動) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -103,7 +90,6 @@ def audit_with_gemini(extracted_data_list, api_key):
         combined_input += f"【頁首文字片段】:\n{data['header_text']}\n"
         combined_input += f"【表格數據】:\n{data['table']}\n"
 
-    # System Prompt 完全保持原樣
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
     請依據 Azure OCR 提取的表格文字進行稽核。
@@ -196,8 +182,7 @@ def audit_with_gemini(extracted_data_list, api_key):
         return f"Error: {str(e)}"
 
 # --- 6. 手機版 UI ---
-# 【這裡就是修改標題文字的地方】
-st.title("🏭 中機交貨單稽核") 
+st.title("🏭 中鋼機械稽核")
 
 # A. 檔案上傳區
 with st.container(border=True):
