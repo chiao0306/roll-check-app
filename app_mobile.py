@@ -10,10 +10,10 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中機交貨單稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式 ---
+# --- CSS 樣式：按鈕 + 標題優化 ---
 st.markdown("""
 <style>
-/* 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
+/* 1. 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
     height: 60px;          
     font-size: 20px;       
@@ -23,9 +23,17 @@ button[kind="primary"] {
     margin-bottom: 20px;
 }
 
-/* 讓圖片欄位間距變緊湊 */
+/* 2. 讓圖片欄位間距變緊湊 */
 div[data-testid="column"] {
     padding: 2px;
+}
+
+/* 3. 【新增】控制標題字體大小，強制一行顯示 */
+h1 {
+    font-size: 1.7rem !important;   /* 數字越小字越小 (原預設約 2.5rem) */
+    white-space: nowrap !important; /* 強制不換行 */
+    overflow: hidden !important;    /* 超出範圍隱藏 (預防萬一) */
+    text-overflow: ellipsis !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -320,3 +328,4 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
