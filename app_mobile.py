@@ -15,7 +15,7 @@ st.markdown("""
 <style>
 /* 1. 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
-    height: 80px;          
+    height: 60px;          
     font-size: 20px;       
     font-weight: bold;     
     border-radius: 10px;   
@@ -325,5 +325,6 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
 
 
