@@ -98,7 +98,7 @@ def audit_with_gemini(extracted_data_list, api_key):
         combined_input += f"【頁首文字片段】:\n{data['header_text']}\n"
         combined_input += f"【表格數據】:\n{data['table']}\n"
 
-    system_prompt = r"""
+    system_prompt = """
     你是一位極度嚴謹的中鋼機械品管稽核員。
     請依據 Azure OCR 提取的表格文字進行稽核。
 
@@ -325,6 +325,7 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
+
 
 
 
