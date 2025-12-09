@@ -312,7 +312,14 @@ if st.session_state.photo_gallery:
                         
                         failures = item.get('failures', [])
                         if failures:
-                            table_data = [{"滾輪編號": f.get('id', '未知'), "實測值": f.get('val', 'N/A')} for f in failures]
+                            # 動態生成表格：如果有 'calc' 欄位就顯示，沒有就不顯示
+                            table_data = []
+                            for f in failures:
+                                row = {"滾輪編號": f.get('id', '未知'), "實測值": f.get('val', 'N/A')}
+                                if f.get('calc'):
+                                    row["差值/備註"] = f.get('calc')
+                                table_data.append(row)
+                                
                             st.dataframe(table_data, use_container_width=True, hide_index=True)
                         else:
                              st.text(f"實測數據: {item.get('measured', 'N/A')}")
