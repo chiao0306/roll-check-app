@@ -54,15 +54,19 @@ if 'uploader_key' not in st.session_state:
     st.session_state.uploader_key = 0
 
 # --- 4. 核心函數：Azure 神之眼 ---
-def extract_layout_with_azure(file_obj, endpoint, key):
+
+# 加入這行，讓 Streamlit 記住這張圖的結果
+@st.cache_data(show_spinner=False) 
+def extract_layout_with_azure(file_bytes, endpoint, key):
+    # 注意：這裡參數名改為 file_bytes，因為不能快取 file_obj 物件
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
-    file_content = file_obj.getvalue()
     
     poller = client.begin_analyze_document(
         "prebuilt-layout", 
-        file_content,
+        file_bytes, # 直接傳入 bytes
         content_type="application/octet-stream"
     )
+    
     result: AnalyzeResult = poller.result()
     
     markdown_output = ""
@@ -277,11 +281,15 @@ if st.session_state.photo_gallery:
         extracted_data_list = []
         total_imgs = len(st.session_state.photo_gallery)
         
+        # 在主程式迴圈內
         for i, img in enumerate(st.session_state.photo_gallery):
             status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
             img.seek(0)
+            file_bytes = img.read() # 先讀成 bytes
             try:
-                table_md, text_snippets = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
+                # 傳入 bytes
+                table_md, text_snippets = extract_layout_with_azure(file_bytes, DOC_ENDPOINT, DOC_KEY)
+                # ...
                 extracted_data_list.append({
                     "page": i + 1,
                     "table": table_md,
