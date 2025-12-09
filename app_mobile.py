@@ -184,7 +184,11 @@ def audit_with_gemini(extracted_data_list, api_key):
            "spec_logic": "判定標準",
            "common_reason": "錯誤原因概述",
            "failures": [
-              {"id": "Y5612001", "val": "136"}
+              {
+                "id": "Y5612001", 
+                "val": "136",
+                "calc": "若為尺寸跳動異常，請在此列出計算式 (如: 銲補350 - 再生340 = 10mm)"
+              }
            ]
          }
       ]
