@@ -10,10 +10,9 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中機交貨單稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：按鈕 + 標題優化 ---
+# --- CSS 樣式 ---
 st.markdown("""
 <style>
-/* 1. 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
     height: 60px;          
     font-size: 20px;       
@@ -22,18 +21,8 @@ button[kind="primary"] {
     margin-top: 20px;
     margin-bottom: 20px;
 }
-
-/* 2. 讓圖片欄位間距變緊湊 */
 div[data-testid="column"] {
     padding: 2px;
-}
-
-/* 3. 【新增】控制標題字體大小，強制一行顯示 */
-h1 {
-    font-size: 1.7rem !important;   /* 數字越小字越小 (原預設約 2.5rem) */
-    white-space: nowrap !important; /* 強制不換行 */
-    overflow: hidden !important;    /* 超出範圍隱藏 (預防萬一) */
-    text-overflow: ellipsis !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -87,7 +76,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:300] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5. 核心函數：Gemini 神之腦 ---
+# --- 5. 核心函數：Gemini 神之腦 (Prompt 優化版) ---
 def audit_with_gemini(extracted_data_list, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -105,84 +94,61 @@ def audit_with_gemini(extracted_data_list, api_key):
     ### ⛔️ 極重要排除指令 (Exclusion Rules)：
     - **完全無視簽名欄位**：請忽略頁面底部的主管/承辦人簽名、簽核日期。
     - 不論是否有簽名、日期是否正確、是否為 `0月`，**一律不檢查、不回報**。
-    - 請將注意力 100% 集中在「數據表格」與「表頭資訊」。
 
-    ### 0. 核心任務與數據清洗：
+    ### 0. 核心任務與數據前處理：
     - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`, `E30`)。
-    - **分軌識別**：判斷該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
+    - **分軌識別**：區分該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
     - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
+    - **跨頁一致性**：所有頁面的工令編號、交貨日期需完全相同。日期格式 `YYY.MM.DD` (允許空格)。
 
-    ### 1. 數量一致性檢查 (Quantity Logic Split)：
-    - **優先檢查：特例項目**
-      - **熱處理 (Heat Treatment)**：
-        - 規則：**忽略** 項目名稱中的數量要求 (PC)。
-        - 判定：只要該欄位有填寫數據 (通常為重量 KG)，且筆數 >= 1，即視為 **PASS**。
+    ### 1. 全域流程與尺寸履歷檢查 (Process & Dimension Continuity) - 【最優先執行】：
+    **請建立每一支滾輪編號的完整履歷，並執行以下比對：**
     
-    - **情境 A：軸頸 (Journal)**
-      - 適用：項目名稱含「軸頸」或「軸位」。
-      - 規則：允許同一編號出現最多 **2次**。
-      - 數量：**總資料筆數** (含重複) 必須等於 要求數量。
+    #### A. 流程防呆 (Interlock)：
+    - **流程順序**：未再生 -> 銲補 -> 再生車修 -> 研磨。
+    - **前向鎖定**：若「本體未再生」階段已標記為「已完工」(有小數點)，則該編號 **不可出現** 在後續任何流程。
+    - **後向溯源**：若編號出現在「銲補」、「再生」或「研磨」，則 **必須存在** 於該部位的「未再生」紀錄中 (防止幽靈工件)。
 
-    - **情境 B：本體 (Body) 與 其他項目 (預設)**
-      - 適用：項目名稱含「本體」或 未包含上述關鍵字的項目。
-      - 規則：實測數據的「編號」必須 **唯一**。若有重複 -> **FAIL (編號重複)**。
-      - 數量：獨立編號總數 必須等於 要求數量。
+    #### B. 尺寸合理性檢查 (Dimension Jump) - 【嚴格執行】：
+    - 以 **「最終完成尺寸」** (再生車修或研磨) 為基準 (Base)。
+    - **本體 (Body)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 15mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 6mm。
+    - **軸頸 (Journal)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 5mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 5mm。
+    - **異常**：若跳動幅度超過上述範圍 -> **FAIL (尺寸異常：數值不連貫)**。
 
-    ### 2. 存在性依賴檢查 (Dependency Check) - 【Keyway邏輯更新】：
-    - **根依賴 (Root Check)**：所有工件以「本體」為主。若某編號出現在其他項目(如軸頸、Keyway等)，但「本體」項目中完全未出現 -> **FAIL (幽靈工件：無本體紀錄)**。
-    - **Keyway Cut (鍵槽) 依賴**：
-      - **依賴對象**：必須是「有進行軸位再生(Journal Repair)」的編號。
-      - **數量限制 (Per ID)**：針對同一個本體編號，Keyway 數量 **不可大於** 該編號的軸位再生數量。
-        - 若該編號軸位再生 0 端 -> Keyway 必須 0 (不可出現)。
-        - 若該編號軸位再生 1 端 -> Keyway 可為 0 或 1。
-        - 若該編號軸位再生 2 端 -> Keyway 可為 0, 1 或 2。
-      - **異常**：若 Keyway 數量 > 軸位再生數量 -> **FAIL (鍵槽數量異常)**。
+    ### 2. 數量與依賴性檢查 (Quantity & Dependency)：
+    - **熱處理**：忽略數量 PC，有數據即 PASS。
+    - **本體 (Body)**：編號必須 **唯一**。總數需等於要求。
+    - **軸頸 (Journal)**：允許單一編號出現最多 2 次。總資料筆數需等於要求。
+    - **Keyway Cut 依賴**：
+      - 依賴對象：有進行「軸位再生」的編號。
+      - 數量限制：Keyway 數量 <= 該編號的軸位再生數量。
+      - 孤立檢查：Keyway/軸頸出現的編號，本體必須有紀錄。
 
     ### 3. 製程判定邏輯 (分軌制)：
 
     #### A. 【本體 (Body)】未再生/車修：
-    - **規格解析 (Spec Parsing) - 【強制最大值】**：
-      - 請掃描該項目列出的所有尺寸數字 (忽略「每次車修Xmm」或「無裂痕」等文字)。
-      - **關鍵規則**：若出現多個目標尺寸 (例如 338mm 與 344mm)，**一律取數值最大者** 作為唯一比對標準 (Max_Spec)。
-      - 範例：規範包含 338 與 344 -> Max_Spec = 344。
-    - **邏輯分流**：
-      1. **整數** (未完工)：實測值 **<=** Max_Spec。
-      2. **小數** (已完工)：實測值 **>=** Max_Spec，且格式需為 `#.##`。
+    - **規格解析**：忽略「每次車修」，只看「至 Ymm」。多規格取 **最大值 (Max_Spec)**。
+    - **邏輯**：
+      - **整數** (未完工)：實測 <= Max_Spec。
+      - **小數** (已完工)：實測 >= Max_Spec 且 格式為 `#.##`。
 
     #### B. 【軸頸 (Journal)】未再生/車修：
-    - **步驟 1 (智慧歸類)**：若有多個規格 (如 157, 127)，請計算實測值與各規格的距離，選出 **數值最接近** 的那個當作「目標規格」。
-    - **步驟 2 (數值比對)**：實測值 必須 **<= (小於等於)** 目標規格。
-    - **步驟 3 (格式檢查)**：實測值必須為 **整數**。若有小數點 -> **FAIL** (軸頸未再生不可完工)。
+    - **規格比對**：採「智慧歸類 (Proximity Match)」，與實測值最接近的規格為目標。
+    - **邏輯**：實測 <= 目標規格。
+    - **格式**：必須為 **整數**。出現小數 -> **FAIL**。
 
-    #### C. 銲補 (Welding) (通用)：
-    - 規則：實測值 **>=** 規格。
+    #### C. 銲補 (Welding)：
+    - **多重規格鎖定**：若再生車修確定為大尺寸，此處必須比對大尺寸規格。
+    - **邏輯**：實測 >= 規格。
 
-    #### D. 再生車修 (Finish) (通用)：
-    - 多重規格判定：若項目列出多個規格區間 (如：一、160mm...；二、130mm...)，採「符合任一即合格」原則。
-      - 請將實測值分別與各規格區間比對。
-      - 若落入 任意一個 規格的公差範圍內，即判定為 PASS。
-    - 數值：包含於 (Inclusive) 上下限之間。
-    - 格式：忽略空格後，必須精確到小數點後兩位。
-
-    ### 4. 全域流程防呆 (Process Integrity) - ：
-    - **多重規格一致性鎖定 (Spec Consistency Lock)**：
-      - **適用情境**：當軸頸/軸位項目有「多重規格」(例如大小頭：160mm 與 130mm) 時。
-      - **鎖定邏輯**：請以該編號在 **「再生車修」** 的實測值來判定它屬於哪一類 (例如實測 139.98 -> 判定為 160mm 類)。
-      - **回溯檢查**：該編號在前面的 **「未再生」** 與 **「銲補」** 階段，**必須** 使用同一類別的規格進行比對。
-      - **異常**：若「再生」是大尺寸，但「銲補」卻使用小尺寸規格來通過檢查 (例如 135 < 143，卻去比對 133) -> **FAIL (規格選用不一致)**。
-    - **流程定義**：本體未再生 -> 銲補 -> 再生車修 -> **研磨 (Grinding)**。
-    - **前向檢查**：本體未再生已完工(小數) -> 不可出現在後續 (銲補/再生)。
-    - **後向檢查**：若某編號出現在「銲補」、「再生車修」或 **「研磨」**，則 **必須出現** 在該部位的「未再生」階段 (溯源檢查)。
-    - **尺寸合理性檢查 (Dimension Continuity) - 【分部位精確判定】：**
-      - **核心邏輯**：建立同一編號的流程履歷，以「最終完成尺寸」(再生車修或研磨) 為基準 (Base)，檢查各階段的跳動幅度。
-      - **A. 本體 (Body)**：
-        - 未再生車修 (往下跳動)：差距不可超過 **15mm** (即 `Base - 未再生 <= 15`)。
-        - 銲補 (往上跳動)：差距不可超過 **6mm** (即 `銲補 - Base <= 6`)。
-      - **B. 軸頸 (Journal)**：
-        - 未再生車修 (往下跳動)：差距不可超過 **5mm** (即 `Base - 未再生 <= 5`)。
-        - 銲補 (往上跳動)：差距不可超過 **5mm** (即 `銲補 - Base <= 5`)。
-      - **異常判定**：若任一階段超出上述合理區間 -> **FAIL (尺寸異常：跳動幅度過大)**。
-    - **跨頁一致性**：工令、日期需一致 (日期格式 `YYY.MM.DD` 允許空格)。
+    #### D. 再生車修 (Finish)：
+    - **多重規格**：符合任一規格區間即 PASS (同時鎖定該編號的規格身份)。
+    - **數值**：**包含於 (Inclusive)** 上下限之間。
+    - **格式**：忽略空格後，必須精確到小數點後兩位。
 
     ### 輸出格式 (JSON Only)：
     {
@@ -228,7 +194,6 @@ with st.container(border=True):
             st.session_state.photo_gallery.append(f)
         st.session_state.uploader_key += 1
         
-        # 自動捲動
         components.html(
             """
             <script>
@@ -245,7 +210,6 @@ if st.session_state.photo_gallery:
     
     st.caption(f"已累積 {len(st.session_state.photo_gallery)} 頁文件")
 
-    # --- 操作按鈕區 (置頂) ---
     col_btn1, col_btn2 = st.columns([3, 1])
     
     with col_btn1:
@@ -258,7 +222,6 @@ if st.session_state.photo_gallery:
         st.session_state.photo_gallery = []
         st.rerun()
 
-    # --- 執行分析邏輯 ---
     if start_btn:
         start_time = time.time()
         status = st.empty()
@@ -292,7 +255,6 @@ if st.session_state.photo_gallery:
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        # 3. 顯示結果
         try:
             result = json.loads(result_str)
             if isinstance(result, list): result = result[0] if len(result) > 0 else {}
@@ -334,7 +296,6 @@ if st.session_state.photo_gallery:
             st.code(result_str)
             st.write(e)
 
-    # --- 圖片縮圖區 ---
     st.divider()
     st.caption("已拍攝照片：")
     
@@ -348,8 +309,3 @@ if st.session_state.photo_gallery:
 
 else:
     st.info("👆 請點擊上方按鈕開始新增照片")
-
-
-
-
-
