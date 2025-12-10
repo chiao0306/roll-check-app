@@ -48,13 +48,9 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State (結構升級) ---
-if 'photo_gallery' not in st.session_state: 
-    st.session_state.photo_gallery = [] 
-    # 結構說明: 列表中的每個元素現在是字典: 
-    # {'file': file_obj, 'table_md': None, 'header_text': None}
-if 'uploader_key' not in st.session_state: 
-    st.session_state.uploader_key = 0
+# --- 3. 初始化 Session State ---
+if 'photo_gallery' not in st.session_state: st.session_state.photo_gallery = []
+if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
@@ -85,7 +81,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5.1 Agent A: 工程師 ---
+# --- 5.1 Agent A: 工程師 (詳細驗證邏輯版) ---
 def agent_engineer_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -114,15 +110,17 @@ def agent_engineer_check(combined_input, api_key):
     - **存在性依賴**：若編號出現在軸頸/Keyway/內孔，但本體完全沒出現 -> **FAIL (幽靈工件)**。
     - **Keyway/內孔依賴**：必須有「軸位再生」才能做。
 
-    #### B. 尺寸邏輯檢查 (Size Ordering) - 【嚴格執行】：
-    - **核心原則**：針對同一編號，依據製程物理特性，尺寸大小必須符合以下順序：
-      **`未再生 (Pre-repair) < 研磨 (Grinding) < 再生車修 (Finish) < 銲補 (Welding)`**
-    - **詳細驗證規則** (若該階段有數據)：
-      1. **未再生車修**：必須是該編號所有流程中的 **最小值**。
-      2. **銲補**：必須是該編號所有流程中的 **最大值**。
-      3. **研磨 vs 再生**：若兩者皆存在，**研磨 必須小於 再生車修**。
-    - **異常判定**：若違反上述任何大小關係 (例如：未再生 > 再生，或 研磨 > 銲補) -> **FAIL (尺寸邏輯異常：違反製程大小順序)**。
-    
+    #### B. 尺寸合理性檢查 (Dimension Jump) - 【嚴格執行】：
+    - **研磨限制**：研磨尺寸 必須小於 再生車修尺寸。
+    - 以 **「最終完成尺寸」** (再生車修或研磨) 為基準 (Base)。
+    - **本體 (Body)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 20mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 8mm。
+    - **軸頸 (Journal)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 5mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 7mm。
+    - **異常**：跳動幅度過大 -> **FAIL (尺寸異常)**。
+
     ### 2. 製程判定邏輯 (分軌制)：
     **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
@@ -151,21 +149,31 @@ def agent_engineer_check(combined_input, api_key):
          {
            "page": "頁碼",
            "item": "項目名稱",
+           "roll_id": "滾輪編號 (如 Y5612)",
+           "raw_value": "OCR讀到的原始數值 (如 '341 . 12')",
+           "target_spec": "對應的規格 (如 '>= 340')",
+           "verification_logic": "寫下你的判定邏輯 (例如: 341.12 >= 340 is True)",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
-           "spec_logic": "判定標準",
-           "common_reason": "簡短說明錯誤原因",
-           "failures": [{"id": "ID", "val": "Value", "calc": "計算式(若有)"}]
+           "result": "FAIL" 
          }
       ]
     }
     """
+    
+    generation_config = {
+        "response_mime_type": "application/json",
+        "temperature": 0.0,
+        "top_p": 0.1,
+        "top_k": 1
+    }
+    
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
+        response = model.generate_content([system_prompt, combined_input], generation_config=generation_config)
         return json.loads(response.text)
     except:
         return {"issues": []}
 
-# --- 5.2 Agent B: 會計師 ---
+# --- 5.2 Agent B: 會計師 (保持原樣) ---
 def agent_accountant_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -197,24 +205,30 @@ def agent_accountant_check(combined_input, api_key):
     ### 3. 上方統計欄位稽核 (Summary Table Reconciliation) - 【邏輯修正】：
     **請核對左上角「統計表格」的「實交數量」與內文計數：**
     - **重要前提**：上方統計表格的數值代表 **「全卷總數」**。若在每一頁重複出現，**請勿累加**，取單一值即可。
-    - **A. 運費規則 (Freight) - 【新增】：**
-      - 適用項目：名稱包含「運費」者 (如「輥輪拆裝.車修或銲補運費」)。
-      - **計數來源**：全卷所有 **「本體 (Body)」** 的總數量 (即有多少支獨特編號的輥輪)。
-      - **檢查**：統計欄位的數值 必須等於 本體總數。
-    - **B. 雙軌聚合 (Aggregated)**：
+    - **A. 雙軌聚合 (Aggregated)**：
       - 項目：含「ROLL 車修」、「ROLL 銲補」、「ROLL 拆裝」。
       - 車修總數 = 全卷 (本體未再生 + 本體再生 + 軸頸未再生 + 軸頸再生) 總和。
       - 銲補總數 = 全卷 (本體銲補 + 軸頸銲補) 總和。
       - 拆裝總數 = 全卷 (新品組裝 + 舊品拆裝) 總和。
-    - **C. 通用規則**：其他項目 (如水管拆除) -> 統計數 = 下方列表數。
-    - **D. 例外**：**W3 #6 機 改造 驅動輥輪** 不列入聚合，採通用規則獨立核對。
-    
-
+    - **B. 通用規則**：其他項目 (如水管拆除) -> 統計數 = 下方列表數。
+    - **C. 例外**：**W3 #6 機 驅動輥輪** 不列入聚合，採通用規則獨立核對。
+    - **D. 運費規則 (Freight)**：
+      - 適用項目：名稱包含「運費」者。
+      - **計數來源**：全卷所有 **「本體 (Body)」** 的總數量。
+      - **檢查**：統計欄位的數值 必須等於 本體總數。
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
+
+    ### 4. 執行步驟 (Step-by-Step Execution) - 【強制點名】：
+    為了確保數量準確，在判斷數量是否異常前，請執行以下內心思考：
+    1. **Extraction (提取)**：找出該項目所有相關的實測編號。
+    2. **Counting (計數)**：計算這些編號的數量。
+    3. **Comparison (比對)**：與目標數量比對。
+    4. **Reporting (回報)**：只有當兩者不符時，才生成 Error。
 
     ### 輸出格式 (JSON Only)：
     {
       "job_no": "工令編號",
+      "debug_inventory": ["列出你找到的所有相關編號"],
       "issues": [
          {
            "page": "頁碼",
@@ -227,8 +241,16 @@ def agent_accountant_check(combined_input, api_key):
       ]
     }
     """
+    
+    generation_config = {
+        "response_mime_type": "application/json",
+        "temperature": 0.0,
+        "top_p": 0.1,
+        "top_k": 1
+    }
+
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
+        response = model.generate_content([system_prompt, combined_input], generation_config=generation_config)
         return json.loads(response.text)
     except:
         return {"job_no": "Error", "issues": []}
@@ -237,11 +259,9 @@ def agent_accountant_check(combined_input, api_key):
 st.title("🏭 中機交貨單稽核")
 
 with st.container(border=True):
-    # 修改：使用 dictionary 來儲存上傳的檔案，包含 'file' 物件 和 OCR 結果
     uploaded_files = st.file_uploader("📂 新增頁面", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
     if uploaded_files:
         for f in uploaded_files: 
-            # 【關鍵】: 將檔案包裝成字典，預留 table_md 和 header_text 欄位
             st.session_state.photo_gallery.append({
                 'file': f, 
                 'table_md': None, 
@@ -254,10 +274,10 @@ with st.container(border=True):
 if st.session_state.photo_gallery:
     st.caption(f"已累積 {len(st.session_state.photo_gallery)} 頁文件")
     col_btn1, col_btn2 = st.columns([3, 1])
-    with col_btn1: start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
+    with col_btn1: start_btn = st.button("🚀 開始分析", type="primary", key="start_btn", width="stretch")
     with col_btn2: 
         st.write("")
-        clear_btn = st.button("🗑️照片清除", help="清除", use_container_width=True)
+        clear_btn = st.button("🗑️清除照片", help="清除", key="clear_btn", width="stretch")
 
     if clear_btn:
         st.session_state.photo_gallery = []
@@ -268,49 +288,33 @@ if st.session_state.photo_gallery:
         status = st.empty()
         progress_bar = st.progress(0)
         
-        # 1. OCR (含快取機制)
+        # 1. OCR (含快取)
         extracted_data_list = []
         total_imgs = len(st.session_state.photo_gallery)
-        
         ocr_start = time.time()
         
         for i, item in enumerate(st.session_state.photo_gallery):
             img_file = item['file']
-            
-            # 【快取檢查】: 如果已經有 OCR 結果，就跳過 Azure 呼叫
             if item['table_md'] and item['header_text']:
                 status.text(f"讀取第 {i+1} 頁快取資料...")
-                extracted_data_list.append({
-                    "page": i + 1, 
-                    "table": item['table_md'], 
-                    "header_text": item['header_text']
-                })
-                # 模擬一點延遲讓進度條順暢，實際不用等
+                extracted_data_list.append({"page": i + 1, "table": item['table_md'], "header_text": item['header_text']})
                 time.sleep(0.1) 
             else:
                 status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
                 img_file.seek(0)
                 try:
                     table_md, text_snippets = extract_layout_with_azure(img_file, DOC_ENDPOINT, DOC_KEY)
-                    
-                    # 【寫入快取】: 將結果存回 session_state
                     item['table_md'] = table_md
                     item['header_text'] = text_snippets
-                    
-                    extracted_data_list.append({
-                        "page": i + 1, 
-                        "table": table_md, 
-                        "header_text": text_snippets
-                    })
+                    extracted_data_list.append({"page": i + 1, "table": table_md, "header_text": text_snippets})
                 except Exception as e:
                     st.error(f"第 {i+1} 頁讀取失敗: {e}")
-            
             progress_bar.progress((i + 1) / (total_imgs + 1))
         
         ocr_end = time.time()
         ocr_duration = ocr_end - ocr_start
 
-        # 2. Gemini 雙軌計時
+        # 2. Gemini
         combined_input = "以下是各頁資料：\n"
         for data in extracted_data_list:
             combined_input += f"\n=== Page {data['page']} ===\n【頁首】:\n{data['header_text']}\n【表格】:\n{data['table']}\n"
@@ -358,26 +362,45 @@ if st.session_state.photo_gallery:
                     if "流程" in itype or "尺寸" in itype or "統計" in itype: c2.error(f"🛑 {itype}")
                     else: c2.warning(f"⚠️ {itype}")
                     
+                    # 顯示原因與標準
                     st.caption(f"原因: {item.get('common_reason')}")
-                    if item.get('spec_logic'): st.caption(f"標準: {item.get('spec_logic')}")
+                    # 工程師回傳的 spec_logic 可能放在不同欄位，這裡做兼容
+                    spec = item.get('spec_logic') or item.get('target_spec')
+                    if spec: st.caption(f"標準: {spec}")
                     
-                    failures = item.get('failures', [])
-                    if failures:
-                        table_data = []
-                        for f in failures:
-                            row = {"滾輪編號": f.get('id', '未知'), "實測/計數": f.get('val', 'N/A')}
-                            if f.get('calc'): row["差值/備註"] = f.get('calc')
-                            table_data.append(row)
+                    # 顯示詳細驗證邏輯 (針對工程師的新格式)
+                    if item.get('verification_logic'):
+                        st.caption(f"驗證: {item.get('verification_logic')}")
+
+                    # 表格顯示邏輯
+                    # 情況1: 工程師的新格式 (roll_id, raw_value)
+                    if 'roll_id' in item:
+                        # 為了排版漂亮，我們把它轉成表格格式
+                        table_data = [{
+                            "滾輪編號": item.get('roll_id'),
+                            "實測值": item.get('raw_value'),
+                            "規格": item.get('target_spec')
+                        }]
                         st.dataframe(table_data, use_container_width=True, hide_index=True)
-                    else:
-                        st.text(f"實測數據: {item.get('measured', 'N/A')}")
+                        
+                    # 情況2: 會計師的舊格式 (failures list)
+                    elif 'failures' in item:
+                        failures = item.get('failures', [])
+                        if failures:
+                            table_data = []
+                            for f in failures:
+                                row = {"滾輪編號": f.get('id', '未知'), "實測/計數": f.get('val', 'N/A')}
+                                if f.get('calc'): row["差值/備註"] = f.get('calc')
+                                table_data.append(row)
+                            st.dataframe(table_data, use_container_width=True, hide_index=True)
+                        else:
+                            st.text(f"實測數據: {item.get('measured', 'N/A')}")
 
     st.divider()
     st.caption("已拍攝照片：")
     cols = st.columns(4)
     for idx, item in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
-            # 注意: 這裡改用 item['file'] 來顯示圖片
             st.image(item['file'], caption=f"P.{idx+1}", use_container_width=True)
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
