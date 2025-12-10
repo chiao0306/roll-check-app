@@ -64,7 +64,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5.1 Agent A: 工程師 (針對銲補邏輯修正) ---
+# --- 5.1 Agent A: 工程師 (復原版 + 降溫) ---
 def agent_engineer_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -77,6 +77,11 @@ def agent_engineer_check(combined_input, api_key):
     1. **合格即PASS**：只要實測值落在規格區間內 (包含邊界值)，就是 **PASS**。
     2. **禁止雞婆**：絕對 **不要** 回報「接近上限」、「裕度不足」、「剛好達標」等主觀意見。這會干擾判斷。
     3. **排除無關項目**：不檢查數量、不檢查表頭、不檢查簽名。
+
+    ### 0. 核心任務與數據前處理：
+    - **識別滾輪編號 (Roll ID)**：找出每筆數據對應的編號 (如 `Y5612001`, `E30`)。
+    - **分軌識別**：區分該項目屬於「本體 (Body)」還是「軸頸 (Journal)」。
+    - **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
 
     ### 1. 核心邏輯 (Process & Dimension)：
     **請建立每一支滾輪編號 (Roll ID) 的完整履歷，並執行以下比對：**
@@ -111,13 +116,9 @@ def agent_engineer_check(combined_input, api_key):
     - **邏輯**：實測 <= 目標規格。
     - **格式**：必須為 **整數**。出現小數 -> **FAIL**。
 
-    #### C. 銲補 (Welding) - 【嚴格加法邏輯】：
-    - **方向性**：銲補是增加厚度，數值 **越大越好**。
-    - **判定公式**：`實測值 >= 規格值`。
-    - **防呆範例**：
-      - 規格 233，實測 235 -> **PASS** (因為 235 > 233)。
-      - 規格 143，實測 135 -> **FAIL** (因為 135 < 143)。
-      - **絕對禁止** 回報「大於規格」為異常。只有「小於規格」才是異常。
+    #### C. 銲補 (Welding) - 【加法邏輯】：
+    - **邏輯防呆**：銲補是加肉，數值越大越好。
+    - **規則**：實測值 **>=** 規格。嚴禁使用未再生的<=邏輯。
 
     #### D. 再生車修 (Finish) / E. 內孔 (Inner Hole)：
     - **多重規格**：符合任一規格區間即 PASS。
@@ -140,12 +141,16 @@ def agent_engineer_check(combined_input, api_key):
     }
     """
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json"})
+        # 【修正重點】：加入 temperature=0.0，強制 AI 零創造力，保證結果穩定
+        response = model.generate_content(
+            [system_prompt, combined_input], 
+            generation_config={"response_mime_type": "application/json", "temperature": 0.0}
+        )
         return json.loads(response.text)
     except:
         return {"issues": []}
 
-# --- 5.2 Agent B: 會計師 (保持原樣) ---
+# --- 5.2 Agent B: 會計師 (降溫) ---
 def agent_accountant_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -202,7 +207,11 @@ def agent_accountant_check(combined_input, api_key):
     }
     """
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json"})
+        # 【修正重點】：加入 temperature=0.0
+        response = model.generate_content(
+            [system_prompt, combined_input], 
+            generation_config={"response_mime_type": "application/json", "temperature": 0.0}
+        )
         return json.loads(response.text)
     except:
         return {"job_no": "Error", "issues": []}
