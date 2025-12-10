@@ -64,7 +64,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5.1 Agent A: 工程師 (負責製程與尺寸) ---
+# --- 5.1 Agent A: 工程師 (修正囉嗦問題) ---
 def agent_engineer_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -72,12 +72,11 @@ def agent_engineer_check(combined_input, api_key):
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管【工程師】。
     你的任務是專注於「數據規格」、「製程邏輯」與「尺寸合理性」。
-    **請完全忽略** 數量計算與表頭統計，那不是你的工作。
-
-    ### ⛔️ 排除指令：
-    - 不檢查數量 PC/SET 是否相符。
-    - 不檢查表頭統計欄位。
-    - 不檢查簽名。
+    
+    ### ⛔️ 極重要原則 (Strict Rules)：
+    1. **合格即PASS**：只要實測值落在規格區間內 (包含邊界值)，就是 **PASS**。
+    2. **禁止雞婆**：絕對 **不要** 回報「接近上限」、「裕度不足」、「剛好達標」等主觀意見。這會干擾判斷。
+    3. **排除無關項目**：不檢查數量、不檢查表頭、不檢查簽名。
 
     ### 1. 核心邏輯 (Process & Dimension)：
     **請建立每一支滾輪編號 (Roll ID) 的完整履歷，並執行以下比對：**
@@ -119,7 +118,7 @@ def agent_engineer_check(combined_input, api_key):
     #### D. 再生車修 (Finish) / E. 內孔 (Inner Hole)：
     - **多重規格**：符合任一規格區間即 PASS。
     - **內孔對應**：軸頸~85 -> 孔50；軸頸~75 -> 孔45。
-    - **數值**：**包含於 (Inclusive)** 上下限之間。
+    - **數值**：**包含於 (Inclusive)** 上下限之間。 `Min <= X <= Max` 均為合格。
     - **格式**：精確到小數點後兩位。
 
     ### 輸出格式 (JSON Only)：
@@ -130,7 +129,7 @@ def agent_engineer_check(combined_input, api_key):
            "item": "項目名稱",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
            "spec_logic": "判定標準",
-           "common_reason": "錯誤原因概述",
+           "common_reason": "簡短說明錯誤原因",
            "failures": [{"id": "ID", "val": "Value", "calc": "計算式(若有)"}]
          }
       ]
@@ -142,7 +141,7 @@ def agent_engineer_check(combined_input, api_key):
     except:
         return {"issues": []}
 
-# --- 5.2 Agent B: 會計師 (負責數量與統計) ---
+# --- 5.2 Agent B: 會計師 (保持原樣) ---
 def agent_accountant_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -173,22 +172,14 @@ def agent_accountant_check(combined_input, api_key):
 
     ### 3. 上方統計欄位稽核 (Summary Table Reconciliation) - 【邏輯修正】：
     **請核對左上角「統計表格」的「實交數量」與內文計數：**
-    
-    - **重要前提 (重複出現規則)**：
-      - 上方統計表格的數值代表 **「全卷總數」**。
-      - 若同一項目的統計欄位在每一頁都出現 (例如 P1 寫車修56, P2 也寫車修56)，**請勿將它們累加**。
-      - **正確邏輯**：目標數量 = 56 (取任一頁數值即可)。
-      - **錯誤邏輯**：目標數量 = 56 + 56 = 112 (絕對禁止)。
-
+    - **重要前提**：上方統計表格的數值代表 **「全卷總數」**。若在每一頁重複出現，**請勿累加**，取單一值即可。
     - **A. 雙軌聚合 (Aggregated)**：
       - 項目：含「ROLL 車修」、「ROLL 銲補」、「ROLL 拆裝」。
       - 車修總數 = 全卷 (本體未再生 + 本體再生 + 軸頸未再生 + 軸頸再生) 總和。
       - 銲補總數 = 全卷 (本體銲補 + 軸頸銲補) 總和。
       - 拆裝總數 = 全卷 (新品組裝 + 舊品拆裝) 總和。
-    
     - **B. 通用規則**：其他項目 (如水管拆除) -> 統計數 = 下方列表數。
     - **C. 例外**：**W3 #6 機 驅動輥輪** 不列入聚合，採通用規則獨立核對。
-    
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
 
     ### 輸出格式 (JSON Only)：
@@ -235,13 +226,12 @@ if st.session_state.photo_gallery:
         st.session_state.photo_gallery = []
         st.rerun()
 
-    # --- 執行分析邏輯 ---
     if start_btn:
         total_start = time.time()
         status = st.empty()
         progress_bar = st.progress(0)
         
-        # 1. OCR 計時開始
+        # 1. OCR 計時
         ocr_start = time.time()
         extracted_data_list = []
         total_imgs = len(st.session_state.photo_gallery)
@@ -251,26 +241,21 @@ if st.session_state.photo_gallery:
             img.seek(0)
             try:
                 table_md, text_snippets = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
-                extracted_data_list.append({
-                    "page": i + 1,
-                    "table": table_md,
-                    "header_text": text_snippets 
-                })
+                extracted_data_list.append({"page": i + 1, "table": table_md, "header_text": text_snippets})
             except Exception as e:
                 st.error(f"第 {i+1} 頁讀取失敗: {e}")
             progress_bar.progress((i + 1) / (total_imgs + 1))
         
-        ocr_end = time.time() # OCR 結束
+        ocr_end = time.time()
         ocr_duration = ocr_end - ocr_start
 
-        # 2. Gemini 雙軌計時邏輯
+        # 2. Gemini 雙軌計時
         combined_input = "以下是各頁資料：\n"
         for data in extracted_data_list:
             combined_input += f"\n=== Page {data['page']} ===\n【頁首】:\n{data['header_text']}\n【表格】:\n{data['table']}\n"
 
         status.text("Gemini 雙代理人正在平行稽核 (工程師 & 會計師)...")
         
-        # 定義一個帶計時的包裝函數
         def run_with_timer(func, *args):
             t0 = time.time()
             res = func(*args)
@@ -281,7 +266,6 @@ if st.session_state.photo_gallery:
             future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, GEMINI_KEY)
             future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, GEMINI_KEY)
             
-            # 取得結果與時間
             res_eng, time_eng = future_eng.result()
             res_acc, time_acc = future_acc.result()
         
@@ -291,13 +275,12 @@ if st.session_state.photo_gallery:
         total_end = time.time()
         total_duration = total_end - total_start
         
-        # 3. 合併結果與顯示時間
+        # 3. 合併結果
         job_no = res_acc.get("job_no", "Unknown")
         issues_eng = res_eng.get("issues", [])
         issues_acc = res_acc.get("issues", [])
         all_issues = issues_eng + issues_acc
 
-        # 顯示詳細時間
         st.success(f"工令: {job_no}")
         st.info(f"⏱️ 總耗時: {total_duration:.1f}s (Azure: {ocr_duration:.1f}s | 工程師: {time_eng:.1f}s | 會計師: {time_acc:.1f}s)")
         
@@ -306,22 +289,16 @@ if st.session_state.photo_gallery:
             st.success("✅ 全數合格！")
         else:
             st.error(f"發現 {len(all_issues)} 類異常項目")
-            
             for item in all_issues:
                 with st.container(border=True):
-                    col_head1, col_head2 = st.columns([3, 1])
-                    page_str = str(item.get('page', '?'))
-                    col_head1.markdown(f"**P.{page_str} | {item.get('item')}**")
-                    
+                    c1, c2 = st.columns([3, 1])
+                    c1.markdown(f"**P.{item.get('page', '?')} | {item.get('item')}**")
                     itype = item.get('issue_type', '異常')
-                    if "流程" in itype or "尺寸" in itype or "統計" in itype:
-                        col_head2.error(f"🛑 {itype}")
-                    else:
-                        col_head2.warning(f"⚠️ {itype}")
+                    if "流程" in itype or "尺寸" in itype or "統計" in itype: c2.error(f"🛑 {itype}")
+                    else: c2.warning(f"⚠️ {itype}")
                     
                     st.caption(f"原因: {item.get('common_reason')}")
-                    if item.get('spec_logic'):
-                        st.caption(f"標準: {item.get('spec_logic')}")
+                    if item.get('spec_logic'): st.caption(f"標準: {item.get('spec_logic')}")
                     
                     failures = item.get('failures', [])
                     if failures:
@@ -332,7 +309,7 @@ if st.session_state.photo_gallery:
                             table_data.append(row)
                         st.dataframe(table_data, use_container_width=True, hide_index=True)
                     else:
-                         st.text(f"實測數據: {item.get('measured', 'N/A')}")
+                        st.text(f"實測數據: {item.get('measured', 'N/A')}")
 
     st.divider()
     st.caption("已拍攝照片：")
