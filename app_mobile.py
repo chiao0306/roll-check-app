@@ -9,16 +9,33 @@ import time
 import concurrent.futures
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="中鋼機械稽核", page_icon="🏭", layout="centered")
+st.set_page_config(page_title="中機交貨單稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式 ---
+# --- CSS 樣式：按鈕 + 標題優化 ---
 st.markdown("""
 <style>
+/* 1. 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
-    height: 80px; font-size: 20px; font-weight: bold; border-radius: 10px;
-    margin-top: 20px; margin-bottom: 20px;
+    height: 60px;          
+    font-size: 20px;       
+    font-weight: bold;     
+    border-radius: 10px;   
+    margin-top: 20px;
+    margin-bottom: 20px;
 }
-div[data-testid="column"] { padding: 2px; }
+
+/* 2. 讓圖片欄位間距變緊湊 */
+div[data-testid="column"] {
+    padding: 2px;
+}
+
+/* 3. 【新增】控制標題字體大小，強制一行顯示 */
+h1 {
+    font-size: 1.7rem !important;   /* 數字越小字越小 (原預設約 2.5rem) */
+    white-space: nowrap !important; /* 強制不換行 */
+    overflow: hidden !important;    /* 超出範圍隱藏 (預防萬一) */
+    text-overflow: ellipsis !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,7 +230,7 @@ def agent_accountant_check(combined_input, api_key):
         return {"job_no": "Error", "issues": []}
 
 # --- 6. 手機版 UI ---
-st.title("🏭 中鋼機械稽核")
+st.title("🏭 中機交貨單稽核")
 
 with st.container(border=True):
     # 修改：使用 dictionary 來儲存上傳的檔案，包含 'file' 物件 和 OCR 結果
@@ -236,7 +253,7 @@ if st.session_state.photo_gallery:
     with col_btn1: start_btn = st.button("🚀 開始分析", type="primary", use_container_width=True)
     with col_btn2: 
         st.write("")
-        clear_btn = st.button("🗑️", help="清除", use_container_width=True)
+        clear_btn = st.button("🗑️照片清除", help="清除", use_container_width=True)
 
     if clear_btn:
         st.session_state.photo_gallery = []
