@@ -38,6 +38,7 @@ if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+    # 使用 getvalue() 讀取檔案內容，這允許我們多次讀取同一檔案
     file_content = file_obj.getvalue()
     poller = client.begin_analyze_document("prebuilt-layout", file_content, content_type="application/octet-stream")
     result: AnalyzeResult = poller.result()
@@ -64,7 +65,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5.1 Agent A: 工程師 (復原版 + 降溫) ---
+# --- 5.1 Agent A: 工程師 ---
 def agent_engineer_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -141,7 +142,6 @@ def agent_engineer_check(combined_input, api_key):
     }
     """
     try:
-        # 【修正重點】：加入 temperature=0.0，強制 AI 零創造力，保證結果穩定
         response = model.generate_content(
             [system_prompt, combined_input], 
             generation_config={"response_mime_type": "application/json", "temperature": 0.0}
@@ -150,7 +150,7 @@ def agent_engineer_check(combined_input, api_key):
     except:
         return {"issues": []}
 
-# --- 5.2 Agent B: 會計師 (降溫) ---
+# --- 5.2 Agent B: 會計師 ---
 def agent_accountant_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -207,7 +207,6 @@ def agent_accountant_check(combined_input, api_key):
     }
     """
     try:
-        # 【修正重點】：加入 temperature=0.0
         response = model.generate_content(
             [system_prompt, combined_input], 
             generation_config={"response_mime_type": "application/json", "temperature": 0.0}
@@ -251,6 +250,7 @@ if st.session_state.photo_gallery:
         
         for i, img in enumerate(st.session_state.photo_gallery):
             status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
+            # 【關鍵點】：確保每次讀取前，指標都回到原點，這樣可以無限次重複分析
             img.seek(0)
             try:
                 table_md, text_snippets = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
@@ -294,8 +294,8 @@ if st.session_state.photo_gallery:
         issues_acc = res_acc.get("issues", [])
         all_issues = issues_eng + issues_acc
 
-        st.success(f"工令: {job_no}")
-        st.info(f"⏱️ 總耗時: {total_duration:.1f}s (Azure: {ocr_duration:.1f}s | 工程師: {time_eng:.1f}s | 會計師: {time_acc:.1f}s)")
+        st.success(f"工令: {job_no} | ⏱️ 總耗時: {total_duration:.1f}s")
+        st.caption(f"細節耗時: Azure OCR {ocr_duration:.1f}s | 工程師 {time_eng:.1f}s | 會計師 {time_acc:.1f}s")
         
         if not all_issues:
             st.balloons()
