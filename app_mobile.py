@@ -31,14 +31,17 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State ---
-if 'photo_gallery' not in st.session_state: st.session_state.photo_gallery = []
-if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+# --- 3. 初始化 Session State (結構升級) ---
+if 'photo_gallery' not in st.session_state: 
+    st.session_state.photo_gallery = [] 
+    # 結構說明: 列表中的每個元素現在是字典: 
+    # {'file': file_obj, 'table_md': None, 'header_text': None}
+if 'uploader_key' not in st.session_state: 
+    st.session_state.uploader_key = 0
 
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
     client = DocumentIntelligenceClient(endpoint=endpoint, credential=AzureKeyCredential(key))
-    # 使用 getvalue() 讀取檔案內容，這允許我們多次讀取同一檔案
     file_content = file_obj.getvalue()
     poller = client.begin_analyze_document("prebuilt-layout", file_content, content_type="application/octet-stream")
     result: AnalyzeResult = poller.result()
@@ -142,10 +145,7 @@ def agent_engineer_check(combined_input, api_key):
     }
     """
     try:
-        response = model.generate_content(
-            [system_prompt, combined_input], 
-            generation_config={"response_mime_type": "application/json", "temperature": 0.0}
-        )
+        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
         return json.loads(response.text)
     except:
         return {"issues": []}
@@ -207,10 +207,7 @@ def agent_accountant_check(combined_input, api_key):
     }
     """
     try:
-        response = model.generate_content(
-            [system_prompt, combined_input], 
-            generation_config={"response_mime_type": "application/json", "temperature": 0.0}
-        )
+        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
         return json.loads(response.text)
     except:
         return {"job_no": "Error", "issues": []}
@@ -219,9 +216,16 @@ def agent_accountant_check(combined_input, api_key):
 st.title("🏭 中鋼機械稽核")
 
 with st.container(border=True):
+    # 修改：使用 dictionary 來儲存上傳的檔案，包含 'file' 物件 和 OCR 結果
     uploaded_files = st.file_uploader("📂 新增頁面", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
     if uploaded_files:
-        for f in uploaded_files: st.session_state.photo_gallery.append(f)
+        for f in uploaded_files: 
+            # 【關鍵】: 將檔案包裝成字典，預留 table_md 和 header_text 欄位
+            st.session_state.photo_gallery.append({
+                'file': f, 
+                'table_md': None, 
+                'header_text': None
+            })
         st.session_state.uploader_key += 1
         components.html("""<script>window.parent.document.body.scrollTo(0, window.parent.document.body.scrollHeight);</script>""", height=0)
         st.rerun()
@@ -243,20 +247,43 @@ if st.session_state.photo_gallery:
         status = st.empty()
         progress_bar = st.progress(0)
         
-        # 1. OCR 計時
-        ocr_start = time.time()
+        # 1. OCR (含快取機制)
         extracted_data_list = []
         total_imgs = len(st.session_state.photo_gallery)
         
-        for i, img in enumerate(st.session_state.photo_gallery):
-            status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
-            # 【關鍵點】：確保每次讀取前，指標都回到原點，這樣可以無限次重複分析
-            img.seek(0)
-            try:
-                table_md, text_snippets = extract_layout_with_azure(img, DOC_ENDPOINT, DOC_KEY)
-                extracted_data_list.append({"page": i + 1, "table": table_md, "header_text": text_snippets})
-            except Exception as e:
-                st.error(f"第 {i+1} 頁讀取失敗: {e}")
+        ocr_start = time.time()
+        
+        for i, item in enumerate(st.session_state.photo_gallery):
+            img_file = item['file']
+            
+            # 【快取檢查】: 如果已經有 OCR 結果，就跳過 Azure 呼叫
+            if item['table_md'] and item['header_text']:
+                status.text(f"讀取第 {i+1} 頁快取資料...")
+                extracted_data_list.append({
+                    "page": i + 1, 
+                    "table": item['table_md'], 
+                    "header_text": item['header_text']
+                })
+                # 模擬一點延遲讓進度條順暢，實際不用等
+                time.sleep(0.1) 
+            else:
+                status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
+                img_file.seek(0)
+                try:
+                    table_md, text_snippets = extract_layout_with_azure(img_file, DOC_ENDPOINT, DOC_KEY)
+                    
+                    # 【寫入快取】: 將結果存回 session_state
+                    item['table_md'] = table_md
+                    item['header_text'] = text_snippets
+                    
+                    extracted_data_list.append({
+                        "page": i + 1, 
+                        "table": table_md, 
+                        "header_text": text_snippets
+                    })
+                except Exception as e:
+                    st.error(f"第 {i+1} 頁讀取失敗: {e}")
+            
             progress_bar.progress((i + 1) / (total_imgs + 1))
         
         ocr_end = time.time()
@@ -327,9 +354,10 @@ if st.session_state.photo_gallery:
     st.divider()
     st.caption("已拍攝照片：")
     cols = st.columns(4)
-    for idx, img in enumerate(st.session_state.photo_gallery):
+    for idx, item in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
-            st.image(img, caption=f"P.{idx+1}", use_container_width=True)
+            # 注意: 這裡改用 item['file'] 來顯示圖片
+            st.image(item['file'], caption=f"P.{idx+1}", use_container_width=True)
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
                 st.rerun()
