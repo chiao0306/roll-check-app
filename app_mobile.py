@@ -64,7 +64,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
-# --- 5.1 Agent A: 工程師 (修正囉嗦問題) ---
+# --- 5.1 Agent A: 工程師 (針對銲補邏輯修正) ---
 def agent_engineer_check(combined_input, api_key):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("models/gemini-2.5-pro")
@@ -111,9 +111,13 @@ def agent_engineer_check(combined_input, api_key):
     - **邏輯**：實測 <= 目標規格。
     - **格式**：必須為 **整數**。出現小數 -> **FAIL**。
 
-    #### C. 銲補 (Welding) - 【加法邏輯】：
-    - **邏輯防呆**：銲補是加肉，數值越大越好。
-    - **規則**：實測值 **>=** 規格。嚴禁使用未再生的<=邏輯。
+    #### C. 銲補 (Welding) - 【嚴格加法邏輯】：
+    - **方向性**：銲補是增加厚度，數值 **越大越好**。
+    - **判定公式**：`實測值 >= 規格值`。
+    - **防呆範例**：
+      - 規格 233，實測 235 -> **PASS** (因為 235 > 233)。
+      - 規格 143，實測 135 -> **FAIL** (因為 135 < 143)。
+      - **絕對禁止** 回報「大於規格」為異常。只有「小於規格」才是異常。
 
     #### D. 再生車修 (Finish) / E. 內孔 (Inner Hole)：
     - **多重規格**：符合任一規格區間即 PASS。
