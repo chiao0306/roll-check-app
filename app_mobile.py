@@ -61,7 +61,7 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     for c in range(max_col + 1): row_cells.append(rows[r].get(c, ""))
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
-    header_snippet = result.content[:800] if result.content else "" # 稍微加長一點給會計師看
+    header_snippet = result.content[:800] if result.content else ""
     return markdown_output, header_snippet
 
 # --- 5.1 Agent A: 工程師 (負責製程與尺寸) ---
@@ -160,12 +160,22 @@ def agent_accountant_check(combined_input, api_key):
     ### 1. 跨頁一致性 (Header)：
     - 工令編號、交貨日期(預定/實際)：所有頁面必須相同。日期格式 `YYY.MM.DD` (允許空格)。
 
-    ### 2. 數量一致性檢查 (Quantity)：
+    ### 2. 數量一致性檢查 (Quantity Logic Split)：
     - **單位換算**：`(1SET=4PCS)` -> *4；`(SET)` -> *2；`(PC)` -> *1。
     - **熱處理**：忽略數量，有數據即 PASS。
-    - **本體 (Body)**：編號必須 **唯一**。實測總數 = 目標數量。
-    - **軸頸 (Journal) / 內孔**：允許單一編號出現 2 次。實測總數 = 目標數量。
-    - **Keyway**：Keyway 數量 <= 軸位再生數量。
+    
+    #### 情境 A：本體 (Body) - 【唯一性修正】：
+    - **適用對象**：項目名稱含「本體」者。
+    - **規則**：在 **「單一項目 (Single Item)」** 內，編號必須 **唯一** (不可重複登錄)。
+    - **注意**：同一編號出現在不同項目 (如 P2 未再生, P3 銲補) 是正常的，不視為重複。
+    - **數量**：該項目下的獨立編號總數 必須等於 該項目的要求數量。
+
+    #### 情境 B：軸頸 (Journal) / 內孔：
+    - **規則**：允許單一編號在同一項目內出現 2 次。
+    - **數量**：實測總筆數 = 目標數量。
+
+    #### 情境 C：Keyway：
+    - **規則**：Keyway 數量 <= 軸位再生數量。
 
     ### 3. 上方統計欄位稽核 (Summary Table Reconciliation)：
     **請核對左上角「統計表格」的「實交數量」與內文計數：**
