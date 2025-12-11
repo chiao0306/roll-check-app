@@ -151,10 +151,8 @@ def agent_engineer_check(combined_input, api_key):
          {
            "page": "頁碼",
            "item": "項目名稱",
-            "roll_id": "滾輪編號 (如 Y5612)",
-            "raw_value": "OCR讀到的原始數值 (如 '341 . 12')",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
-           "spec_logic": ""寫下你的判定邏輯 (例如: 341.12 >= 340 is True",
+           "spec_logic": "判定標準",
            "common_reason": "簡短說明錯誤原因",
            "failures": [{"id": "ID", "val": "Value", "calc": "計算式(若有)"}]
          }
@@ -214,23 +212,21 @@ def agent_accountant_check(combined_input, api_key):
 
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
 
-    ### 4. 執行步驟 (Step-by-Step Execution) - 必須嚴格遵守：
-    為了確保數量準確，你必須執行「點名」：
-    1. **Extraction (提取)**：先建立一個 JSON 陣列，列出你在文中找到的所有「本體」編號 (List every single Roll ID found)。
-    2. **Counting (計數)**：計算上一步驟陣列中的元素數量。
-    3. **Comparison (比對)**：將計算出的數量與表格上方的「實交數量」或「統計表格」進行比對。
-    4. **Reporting (回報)**：只有當兩者不符時，才生成 Error。
-
-    ### 輸出格式 (JSON Structure)：
-     {
-      "debug_inventory": ["Y5612001", "Y5612002", ...],  // 強制它列出來，這會讓它無法偷懶
-      "calculated_count": 2,
-      "target_count": 2,
-      "is_match": true,
-      "issues": [...]
+    ### 輸出格式 (JSON Only)：
+    {
+      "job_no": "工令編號",
+      "issues": [
+         {
+           "page": "頁碼",
+           "item": "項目名稱",
+           "issue_type": "數量不符 / 統計數量不符 / 跨頁資訊不符 / 編號重複",
+           "spec_logic": "判定標準",
+           "common_reason": "錯誤原因概述",
+           "failures": [{"id": "ID", "val": "Count", "calc": "統計X != 計算Y"}]
+         }
+      ]
     }
-        """
-    
+    """
     try:
         response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
         return json.loads(response.text)
