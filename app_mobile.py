@@ -125,9 +125,6 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
 
     ### 1. 核心邏輯 (Process & Dimension)：
     **請建立每一支滾輪編號 (Roll ID) 的完整履歷，並執行以下比對：**
-    
-    ### 1. 核心邏輯 (Process & Dimension)：
-    **請建立每一支滾輪編號 (Roll ID) 的完整履歷，並執行以下比對：**
 
     #### ⚠️ 獨立項目豁免 (Standalone Exemption) - 【優先排除】：
     - **定義**：以下項目屬於獨立加工，**不參與** 下方的「流程防呆(A)」與「尺寸邏輯檢查(B)」：
