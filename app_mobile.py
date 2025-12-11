@@ -54,6 +54,7 @@ if 'photo_gallery' not in st.session_state:
     # 結構說明: 列表中的每個元素現在是字典: 
     # {'file': file_obj, 'table_md': None, 'header_text': None}
 if 'uploader_key' not in st.session_state: 
+st.session_state.uploader_key = 0
     # --- 【新增】側邊欄模型設定 (請插入在初始化 Session State 之後) ---
 with st.sidebar:
     st.header("🧠 模型設定")
@@ -72,7 +73,6 @@ with st.sidebar:
     st.subheader("👨‍💼 會計師 Agent")
     acc_selection = st.radio("負責：數量、統計、表頭", options=list(model_options.keys()), index=0, key="acc_model")
     acc_model_name = model_options[acc_selection]
-    st.session_state.uploader_key = 0
 
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
