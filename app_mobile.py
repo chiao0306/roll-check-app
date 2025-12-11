@@ -54,6 +54,24 @@ if 'photo_gallery' not in st.session_state:
     # 結構說明: 列表中的每個元素現在是字典: 
     # {'file': file_obj, 'table_md': None, 'header_text': None}
 if 'uploader_key' not in st.session_state: 
+    # --- 【新增】側邊欄模型設定 (請插入在初始化 Session State 之後) ---
+with st.sidebar:
+    st.header("🧠 模型設定")
+    
+    model_options = {
+        "Gemini 2.5 Pro (精準)": "models/gemini-2.5-pro",
+        "Gemini 2.5 Flash (極速)": "models/gemini-2.5-flash"
+    }
+    
+    st.subheader("👷 工程師 Agent")
+    eng_selection = st.radio("負責：製程、尺寸、依賴", options=list(model_options.keys()), index=0, key="eng_model")
+    eng_model_name = model_options[eng_selection]
+    
+    st.divider()
+    
+    st.subheader("👨‍💼 會計師 Agent")
+    acc_selection = st.radio("負責：數量、統計、表頭", options=list(model_options.keys()), index=0, key="acc_model")
+    acc_model_name = model_options[acc_selection]
     st.session_state.uploader_key = 0
 
 # --- 4. 核心函數：Azure 神之眼 ---
@@ -86,9 +104,9 @@ def extract_layout_with_azure(file_obj, endpoint, key):
     return markdown_output, header_snippet
 
 # --- 5.1 Agent A: 工程師 ---
-def agent_engineer_check(combined_input, api_key):
+def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 model_name
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("models/gemini-2.5-pro")
+    model = genai.GenerativeModel(model_name) # 使用傳入的模型
     
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管【工程師】。
@@ -171,9 +189,9 @@ def agent_engineer_check(combined_input, api_key):
         return {"issues": []}
 
 # --- 5.2 Agent B: 會計師 ---
-def agent_accountant_check(combined_input, api_key):
+def agent_accountant_check(combined_input, api_key, model_name): # 多接收 model_name
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("models/gemini-2.5-pro")
+    model = genai.GenerativeModel(model_name) # 使用傳入的模型
     
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管【會計師】。
@@ -334,8 +352,9 @@ if st.session_state.photo_gallery:
             return res, t1 - t0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, GEMINI_KEY)
-            future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, GEMINI_KEY)
+            # 傳入選定的模型名稱 (eng_model_name 和 acc_model_name)
+            future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, GEMINI_KEY, eng_model_name)
+            future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, GEMINI_KEY, acc_model_name)
             
             res_eng, time_eng = future_eng.result()
             res_acc, time_acc = future_acc.result()
