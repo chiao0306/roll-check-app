@@ -55,6 +55,7 @@ if 'photo_gallery' not in st.session_state:
     # {'file': file_obj, 'table_md': None, 'header_text': None}
 if 'uploader_key' not in st.session_state: 
 st.session_state.uploader_key = 0
+
     # --- 【新增】側邊欄模型設定 (請插入在初始化 Session State 之後) ---
 with st.sidebar:
     st.header("🧠 模型設定")
