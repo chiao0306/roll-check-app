@@ -185,21 +185,23 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
       - 實測值必須精確到 **小數點後兩位 (`#.##`)**。
       - 範例：`0.03` -> **PASS**；`0.1` -> **FAIL (位數不足)**；`0.0` -> **FAIL (位數不足)**。
 
-    ### 輸出格式 (JSON Only)：
-    - **說明**：請保持 `common_reason` 簡潔扼要 (15字內)，不要寫長篇大論。
-    {
+    ### 輸出格式 (JSON Only) - 【請極度簡潔，節省成本】：
+    - **common_reason**: 限制在 **15個中文字以內**。例如 "數值超規"、"流程異常"。
+    - **spec_logic**: 僅寫出標準即可，例如 ">= 233"。
+    {{
       "issues": [
-         {
+         {{
            "page": "頁碼",
            "item": "項目名稱",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
            "spec_logic": "判定標準",
-           "common_reason": "簡短錯誤原因",
-           "failures": [{"id": "ID", "val": "Value", "calc": "計算式(若有)"}]
-         }
+           "common_reason": "簡短錯誤原因(限15字)",
+           "failures": [{{ "id": "ID", "val": "Value", "calc": "計算式(若有)" }}]
+         }}
       ]
-    }
+    }}
     """
+    
     try:
         response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
         return json.loads(response.text)
