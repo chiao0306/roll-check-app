@@ -186,6 +186,7 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
       - 範例：`0.03` -> **PASS**；`0.1` -> **FAIL (位數不足)**；`0.0` -> **FAIL (位數不足)**。
 
     ### 輸出格式 (JSON Only)：
+    - **說明**：請保持 `common_reason` 簡潔扼要 (15字內)，不要寫長篇大論。
     {
       "issues": [
          {
@@ -193,7 +194,7 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
            "item": "項目名稱",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
            "spec_logic": "判定標準",
-           "common_reason": "簡短說明錯誤原因",
+           "common_reason": "簡短錯誤原因",
            "failures": [{"id": "ID", "val": "Value", "calc": "計算式(若有)"}]
          }
       ]
@@ -253,11 +254,17 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
       - 拆裝總數 = 全卷 (新品組裝 + 舊品拆裝) 總和。
     - **C. 通用規則**：其他項目 (如水管拆除) -> 統計數 = 下方列表數。
     - **D. 例外**：**W3 #6 機 改造 驅動輥輪** 不列入聚合，採通用規則獨立核對。
-    
-
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
 
+    ### 4. 執行步驟 (Step-by-Step Execution) - 【內心點名，不需回傳】：
+    為了確保數量準確，請在「內心」執行以下步驟，但 **不要** 將名單輸出到 JSON 中：
+    1. **Extraction**：找出該項目所有編號。
+    2. **Counting**：計算數量。
+    3. **Comparison**：比對目標。
+    4. **Reporting**：只回報錯誤結果。
+
     ### 輸出格式 (JSON Only)：
+    - **說明**：請保持 `common_reason` 簡潔 (15字內)。**不要** 回傳編號清單。
     {
       "job_no": "工令編號",
       "issues": [
@@ -266,7 +273,7 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
            "item": "項目名稱",
            "issue_type": "數量不符 / 統計數量不符 / 跨頁資訊不符 / 編號重複",
            "spec_logic": "判定標準",
-           "common_reason": "錯誤原因概述",
+           "common_reason": "簡短錯誤原因",
            "failures": [{"id": "ID", "val": "Count", "calc": "統計X != 計算Y"}]
          }
       ]
