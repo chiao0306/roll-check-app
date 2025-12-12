@@ -256,15 +256,16 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
     - **D. 例外**：**W3 #6 機 改造 驅動輥輪** 不列入聚合，採通用規則獨立核對。
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
 
-    ### 4. 執行步驟 (Step-by-Step Execution) - 【內心點名，不需回傳】：
-    為了確保數量準確，請在「內心」執行以下步驟，但 **不要** 將名單輸出到 JSON 中：
-    1. **Extraction**：找出該項目所有編號。
-    2. **Counting**：計算數量。
-    3. **Comparison**：比對目標。
-    4. **Reporting**：只回報錯誤結果。
+    ### 4. 執行步驟 (Step-by-Step Execution) - 【強制點名，不回傳】：
+    為了確保數量準確，在判斷數量是否異常前，請執行以下內心思考 (不要輸出到 JSON)：
+    1. **Extraction (提取)**：找出該項目所有相關的實測編號。
+    2. **Counting (計數)**：計算這些編號的數量。
+    3. **Comparison (比對)**：與目標數量比對。
+    4. **Reporting (回報)**：只有當兩者不符時，才生成 Error。
 
-    ### 輸出格式 (JSON Only)：
-    - **說明**：請保持 `common_reason` 簡潔 (15字內)。**不要** 回傳編號清單。
+    ### 輸出格式 (JSON Only) - 【請極度簡潔，節省成本】：
+    - **common_reason**: 限制在 **15個中文字以內**。例如 "統計數量不符"、"數量不符"。**禁止** 在此欄位解釋計算過程。
+    - **calc**: 在此欄位顯示簡單算式即可，例如 "統計32 != 計算26"。
     {
       "job_no": "工令編號",
       "issues": [
@@ -273,12 +274,13 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
            "item": "項目名稱",
            "issue_type": "數量不符 / 統計數量不符 / 跨頁資訊不符 / 編號重複",
            "spec_logic": "判定標準",
-           "common_reason": "簡短錯誤原因",
+           "common_reason": "簡短錯誤原因(限15字)",
            "failures": [{"id": "ID", "val": "Count", "calc": "統計X != 計算Y"}]
          }
       ]
     }
     """
+    
     try:
         response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
         return json.loads(response.text)
