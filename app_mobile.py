@@ -197,13 +197,14 @@ def agent_engineer_check(combined_input, full_text_for_search, api_key, model_na
       - 範例：`0.03` -> **PASS**；`0.1` -> **FAIL (位數不足)**；`0.0` -> **FAIL (位數不足)**。
 
     ### 輸出格式 (JSON Only) - 【請極度簡潔，節省成本】：
-    - **common_reason**: 限制在 **15個中文字以內**。例如 "數值超規"、"流程異常"。
+    - **common_reason**: 限制在 **15個中文字以內**。例如 "數值超規"、"流程異常"。**禁止** 在此欄位解釋計算過程。
     - **spec_logic**: 僅寫出標準即可，例如 ">= 233"。
+    - **Excel 標記**：若該項目的判定標準是來自最上方的 **「專案特定規範 (Project Specs)」**，請務必在 `item` 名稱最後面加上 `(📚Excel)` 以供識別。
     {{
       "issues": [
          {{
            "page": "頁碼",
-           "item": "項目名稱",
+           "item": "項目名稱 (若來自Excel請加註標記)",
            "issue_type": "數值超規 / 流程異常 / 尺寸異常 / 格式錯誤 / 依賴異常",
            "spec_logic": "判定標準",
            "common_reason": "簡短錯誤原因(限15字)",
