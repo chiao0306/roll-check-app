@@ -59,24 +59,45 @@ with st.sidebar:
     acc_selection = st.radio("負責：數量、統計、表頭", options=list(model_options.keys()), index=0, key="acc_model")
     acc_model_name = model_options[acc_selection]
 
-# --- 【新增】Excel 規則讀取函數 ---
+# --- Excel 規則讀取函數 (升級版：抗干擾比對 + 類別傳遞) ---
 @st.cache_data
 def get_dynamic_rules(ocr_text):
     try:
-        # 讀取 Excel (GitHub 上的 rules.xlsx)
+        # 1. 讀取 Excel
         df = pd.read_excel("rules.xlsx")
+        
+        # 防呆：去除欄位名稱的前後空白 (避免 Excel 標題多了空格導致讀不到)
+        df.columns = [c.strip() for c in df.columns]
+        
+        # 2. 製作「乾淨版」的 OCR 全文 (移除所有空格、換行)
+        # 這樣就算 Azure 讀成 "W3 \n #6"，我們也能對得到 "W3#6"
+        ocr_text_clean = "".join(str(ocr_text).split())
+        
         matched_rules = []
         for index, row in df.iterrows():
-            keyword = str(row.iloc[0]).strip()
-            rule = str(row.iloc[1]).strip()
-            # 如果 Excel 里的關鍵字出現在 OCR 內容中
-            if keyword in ocr_text:
-                matched_rules.append(f"- 項目: {keyword} -> 規範: {rule}")
+            # 安全讀取欄位 (使用 get 避免欄位改名報錯)
+            keyword = str(row.get('Item_Name', '')).strip()
+            spec = str(row.get('Standard_Spec', '')).strip()
+            category = str(row.get('Category', '')).strip()
+            
+            # 製作「乾淨版」的關鍵字
+            keyword_clean = "".join(keyword.split())
+            
+            # 3. 比對邏輯：只要乾淨的關鍵字存在於乾淨的文中，就算命中
+            if keyword_clean and keyword_clean in ocr_text_clean:
+                # 【關鍵修改】同時傳遞 Category 給 AI，讓它知道要用哪條邏輯
+                rule_desc = f"- 項目: {keyword} | 類別: {category} | 規範: {spec}"
+                matched_rules.append(rule_desc)
         
-        if not matched_rules: return "無特定對應規則，請依通用邏輯判斷。"
+        if not matched_rules: 
+            return "無特定對應規則，請依通用邏輯判斷。"
+            
         return "\n".join(matched_rules)
-    except:
-        return "無外部規則檔 (rules.xlsx)，僅使用通用邏輯。"
+
+    except FileNotFoundError:
+        return "⚠️ 未檢測到 rules.xlsx 規則檔 (請確認檔案是否上傳至 GitHub)。"
+    except Exception as e:
+        return f"讀取規則檔時發生錯誤: {e}"
 
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
