@@ -7,34 +7,22 @@ import google.generativeai as genai
 import json
 import time
 import concurrent.futures
+import pandas as pd  # 【新增】這行一定要有，才能讀 Excel
 
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="中機交貨單稽核", page_icon="🏭", layout="centered")
 
-# --- CSS 樣式：按鈕 + 標題優化 ---
+# --- CSS 樣式 ---
 st.markdown("""
 <style>
-/* 1. 針對 type="primary" 的按鈕 (開始分析) 進行樣式修改 */
 button[kind="primary"] {
-    height: 60px;          
-    font-size: 20px;       
-    font-weight: bold;     
-    border-radius: 10px;   
-    margin-top: 20px;
-    margin-bottom: 20px;
+    height: 60px; font-size: 20px; font-weight: bold; border-radius: 10px;
+    margin-top: 20px; margin-bottom: 20px;
 }
-
-/* 2. 讓圖片欄位間距變緊湊 */
-div[data-testid="column"] {
-    padding: 2px;
-}
-
-/* 3. 【新增】控制標題字體大小，強制一行顯示 */
+div[data-testid="column"] { padding: 2px; }
 h1 {
-    font-size: 1.7rem !important;   /* 數字越小字越小 (原預設約 2.5rem) */
-    white-space: nowrap !important; /* 強制不換行 */
-    overflow: hidden !important;    /* 超出範圍隱藏 (預防萬一) */
-    text-overflow: ellipsis !important;
+    font-size: 1.7rem !important; white-space: nowrap !important;
+    overflow: hidden !important; text-overflow: ellipsis !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -48,15 +36,11 @@ except:
     st.error("找不到金鑰！請在 Streamlit Cloud 設定 Secrets。")
     st.stop()
 
-# --- 3. 初始化 Session State (結構升級) ---
-if 'photo_gallery' not in st.session_state: 
-    st.session_state.photo_gallery = [] 
-    # 結構說明: 列表中的每個元素現在是字典: 
-    # {'file': file_obj, 'table_md': None, 'header_text': None}
-if 'uploader_key' not in st.session_state: 
-    st.session_state.uploader_key = 0
+# --- 3. 初始化 Session State ---
+if 'photo_gallery' not in st.session_state: st.session_state.photo_gallery = []
+if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
-    # --- 【新增】側邊欄模型設定 (請插入在初始化 Session State 之後) ---
+# --- 【新增】側邊欄模型設定 ---
 with st.sidebar:
     st.header("🧠 模型設定")
     
@@ -74,6 +58,25 @@ with st.sidebar:
     st.subheader("👨‍💼 會計師 Agent")
     acc_selection = st.radio("負責：數量、統計、表頭", options=list(model_options.keys()), index=0, key="acc_model")
     acc_model_name = model_options[acc_selection]
+
+# --- 【新增】Excel 規則讀取函數 ---
+@st.cache_data
+def get_dynamic_rules(ocr_text):
+    try:
+        # 讀取 Excel (GitHub 上的 rules.xlsx)
+        df = pd.read_excel("rules.xlsx")
+        matched_rules = []
+        for index, row in df.iterrows():
+            keyword = str(row.iloc[0]).strip()
+            rule = str(row.iloc[1]).strip()
+            # 如果 Excel 里的關鍵字出現在 OCR 內容中
+            if keyword in ocr_text:
+                matched_rules.append(f"- 項目: {keyword} -> 規範: {rule}")
+        
+        if not matched_rules: return "無特定對應規則，請依通用邏輯判斷。"
+        return "\n".join(matched_rules)
+    except:
+        return "無外部規則檔 (rules.xlsx)，僅使用通用邏輯。"
 
 # --- 4. 核心函數：Azure 神之眼 ---
 def extract_layout_with_azure(file_obj, endpoint, key):
@@ -102,16 +105,25 @@ def extract_layout_with_azure(file_obj, endpoint, key):
                     markdown_output += "| " + " | ".join(row_cells) + " |\n"
     
     header_snippet = result.content[:800] if result.content else ""
-    return markdown_output, header_snippet
+    # 回傳全文以供規則比對
+    return markdown_output, header_snippet, result.content
 
-# --- 5.1 Agent A: 工程師 ---
-def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 model_name
+# --- 5.1 Agent A: 工程師 (動態規則版) ---
+def agent_engineer_check(combined_input, full_text_for_search, api_key, model_name):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name) # 使用傳入的模型
+    model = genai.GenerativeModel(model_name)
     
-    system_prompt = """
+    # 1. 先去 Excel 撈規則
+    dynamic_rules = get_dynamic_rules(full_text_for_search)
+
+    system_prompt = f"""
     你是一位極度嚴謹的中鋼機械品管【工程師】。
-    你的任務是專注於「數據規格」、「製程邏輯」與「尺寸合理性」。
+    
+    ### 📂 專案特定規範 (Project Specs from Excel)：
+    **以下是根據文件內容自動檢索到的標準答案，優先級最高：**
+    {dynamic_rules}
+    --------------------------------------------------
+    任務：專注於「數據規格」、「製程邏輯」與「尺寸合理性」。
     
     ### ⛔️ 極重要原則 (Strict Rules)：
     1. **合格即PASS**：只要實測值落在規格區間內 (包含邊界值)，就是 **PASS**。
@@ -125,17 +137,16 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
 
     ### 1. 核心邏輯 (Process & Dimension)：
     **請建立每一支滾輪編號 (Roll ID) 的完整履歷，並執行以下比對：**
-
+    
     #### ⚠️ 獨立項目豁免 (Standalone Exemption) - 【優先排除】：
     - **定義**：以下項目屬於獨立加工，**不參與** 下方的「流程防呆(A)」與「尺寸邏輯檢查(B)」：
       1. **組裝/拆裝** (包含新品組裝、舊品拆裝、真圓度測試)。
       2. **鍵槽 (Keyway)**。
       3. **內孔 (Inner Hole)**。
     - **規則**：針對上述項目，請 **僅執行** 「第 2 點：製程判定邏輯 (單項規格檢查)」，**忽略** 跨流程的前後對照。
-    
+
     #### A. 流程防呆 (Interlock) - 【邏輯修正】：
     - **流程順序**：未再生 -> 銲補 -> 再生車修 -> 研磨。
-    - **適用對象**：僅限「本體」與「軸頸」的主流程項目。
     - **完工定義**：
       - **已完工**：本體未再生實測值為「小數」(有小數點) -> **不可出現** 在後續任何流程。
       - **未完工**：本體未再生實測值為「整數」 -> **必須進入** 後續的「銲補」與「再生車修」流程。
@@ -147,13 +158,15 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
     - **Keyway/內孔依賴**：必須有「軸位再生」才能做。
 
     #### B. 尺寸邏輯檢查 (Size Ordering) - 【嚴格執行】：
-    - **核心原則**：針對同一編號，依據製程物理特性，尺寸大小必須符合以下順序：
-      **`未再生 (Pre-repair) < 研磨 (Grinding) < 再生車修 (Finish) < 銲補 (Welding)`**
-    - **詳細驗證規則** (若該階段有數據)：
-      1. **未再生車修**：必須是該編號所有流程中的 **最小值**。
-      2. **銲補**：必須是該編號所有流程中的 **最大值**。
-      3. **研磨 vs 再生**：若兩者皆存在，**研磨 必須小於 再生車修**。
-    - **異常判定**：若違反上述任何大小關係 (例如：未再生 > 再生，或 研磨 > 銲補) -> **FAIL (尺寸邏輯異常：違反製程大小順序)**。
+    - **研磨限制**：研磨尺寸 必須小於 再生車修尺寸。
+    - 以 **「最終完成尺寸」** (再生車修或研磨) 為基準 (Base)。
+    - **本體 (Body)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 20mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 8mm。
+    - **軸頸 (Journal)**：
+      - 未再生 (往下跳)：`Base - 未再生` 必須 <= 5mm。
+      - 銲補 (往上跳)：`銲補 - Base` 必須 <= 7mm。
+    - **異常**：若跳動幅度超過上述範圍 -> **FAIL (尺寸異常)**。
     
     ### 2. 製程判定邏輯 (分軌制)：
     **數值容錯**：忽略數字間的空格 (如 `341 . 12` -> `341.12`)。
@@ -175,8 +188,8 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
     - **多重規格**：符合任一規格區間即 PASS。
     - **內孔對應**：軸頸~85 -> 孔50；軸頸~75 -> 孔45。
     - **數值**：**包含於 (Inclusive)** 上下限之間。 `Min <= X <= Max` 均為合格。
-    - **格式**：精確到小數點後兩位(`#.##`)。
-    
+    - **格式**：精確到小數點後兩位。
+
     #### F. 組裝/拆裝 (Assembly) - 【真圓度檢查】：
     - **適用項目**：項目名稱包含「舊品拆裝」或「新品組裝」者。
     - **規格識別**：尋找「真圓度」規範 (例如：真圓度 ±0.1mm)。
@@ -202,16 +215,24 @@ def agent_engineer_check(combined_input, api_key, model_name):  # 多接收 mode
     }}
     """
     
+    # 穩定參數
+    generation_config = {
+        "response_mime_type": "application/json",
+        "temperature": 0.0,
+        "top_p": 0.1,
+        "top_k": 1
+    }
+    
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
+        response = model.generate_content([system_prompt, combined_input], generation_config=generation_config)
         return json.loads(response.text)
     except:
         return {"issues": []}
 
-# --- 5.2 Agent B: 會計師 ---
-def agent_accountant_check(combined_input, api_key, model_name): # 多接收 model_name
+# --- 5.2 Agent B: 會計師 (運費規則版) ---
+def agent_accountant_check(combined_input, api_key, model_name):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name) # 使用傳入的模型
+    model = genai.GenerativeModel(model_name)
     
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管【會計師】。
@@ -240,6 +261,7 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
     ### 3. 上方統計欄位稽核 (Summary Table Reconciliation) - 【邏輯修正】：
     **請核對左上角「統計表格」的「實交數量」與內文計數：**
     - **重要前提**：上方統計表格的數值代表 **「全卷總數」**。若在每一頁重複出現，**請勿累加**，取單一值即可。
+    
     - **A. 運費規則 (Freight) - 【邏輯修正】：**
       - 適用項目：名稱包含「運費」者 (如「輥輪拆裝.車修或銲補運費」)。
       - **計數來源**：僅計算全卷 **「本體未再生車修」** 的項目數量。
@@ -255,7 +277,8 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
       - 銲補總數 = 全卷 (本體銲補 + 軸頸銲補) 總和。
       - 拆裝總數 = 全卷 (新品組裝 + 舊品拆裝) 總和。
     - **C. 通用規則**：其他項目 (如水管拆除) -> 統計數 = 下方列表數。
-    - **D. 例外**：**W3 #6 機 改造 驅動輥輪** 不列入聚合，採通用規則獨立核對。
+    - **D. 例外**：**W3 #6 機 驅動輥輪** 不列入聚合，採通用規則獨立核對。
+    
     - **判定**：若 統計數量(單一值) != 計算出的總和 -> **FAIL**。
 
     ### 4. 執行步驟 (Step-by-Step Execution) - 【強制點名，不回傳】：
@@ -283,8 +306,15 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
     }
     """
     
+    generation_config = {
+        "response_mime_type": "application/json",
+        "temperature": 0.0,
+        "top_p": 0.1,
+        "top_k": 1
+    }
+
     try:
-        response = model.generate_content([system_prompt, combined_input], generation_config={"response_mime_type": "application/json", "temperature": 0.0})
+        response = model.generate_content([system_prompt, combined_input], generation_config=generation_config)
         return json.loads(response.text)
     except:
         return {"job_no": "Error", "issues": []}
@@ -293,15 +323,14 @@ def agent_accountant_check(combined_input, api_key, model_name): # 多接收 mod
 st.title("🏭 中機交貨單稽核")
 
 with st.container(border=True):
-    # 修改：使用 dictionary 來儲存上傳的檔案，包含 'file' 物件 和 OCR 結果
     uploaded_files = st.file_uploader("📂 新增頁面", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
     if uploaded_files:
         for f in uploaded_files: 
-            # 【關鍵】: 將檔案包裝成字典，預留 table_md 和 header_text 欄位
             st.session_state.photo_gallery.append({
                 'file': f, 
                 'table_md': None, 
-                'header_text': None
+                'header_text': None,
+                'full_text': None
             })
         st.session_state.uploader_key += 1
         components.html("""<script>window.parent.document.body.scrollTo(0, window.parent.document.body.scrollHeight);</script>""", height=0)
@@ -326,6 +355,7 @@ if st.session_state.photo_gallery:
         
         # 1. OCR (含快取機制)
         extracted_data_list = []
+        full_text_for_search = ""
         total_imgs = len(st.session_state.photo_gallery)
         
         ocr_start = time.time()
@@ -333,31 +363,21 @@ if st.session_state.photo_gallery:
         for i, item in enumerate(st.session_state.photo_gallery):
             img_file = item['file']
             
-            # 【快取檢查】: 如果已經有 OCR 結果，就跳過 Azure 呼叫
-            if item['table_md'] and item['header_text']:
+            if item['table_md'] and item['header_text'] and item.get('full_text'):
                 status.text(f"讀取第 {i+1} 頁快取資料...")
-                extracted_data_list.append({
-                    "page": i + 1, 
-                    "table": item['table_md'], 
-                    "header_text": item['header_text']
-                })
-                # 模擬一點延遲讓進度條順暢，實際不用等
+                extracted_data_list.append({"page": i + 1, "table": item['table_md'], "header_text": item['header_text']})
+                full_text_for_search += item['full_text']
                 time.sleep(0.1) 
             else:
                 status.text(f"Azure 正在掃描第 {i+1}/{total_imgs} 頁...")
                 img_file.seek(0)
                 try:
-                    table_md, text_snippets = extract_layout_with_azure(img_file, DOC_ENDPOINT, DOC_KEY)
-                    
-                    # 【寫入快取】: 將結果存回 session_state
+                    table_md, header_snippet, full_content = extract_layout_with_azure(img_file, DOC_ENDPOINT, DOC_KEY)
                     item['table_md'] = table_md
-                    item['header_text'] = text_snippets
-                    
-                    extracted_data_list.append({
-                        "page": i + 1, 
-                        "table": table_md, 
-                        "header_text": text_snippets
-                    })
+                    item['header_text'] = header_snippet
+                    item['full_text'] = full_content
+                    extracted_data_list.append({"page": i + 1, "table": table_md, "header_text": header_snippet})
+                    full_text_for_search += full_content
                 except Exception as e:
                     st.error(f"第 {i+1} 頁讀取失敗: {e}")
             
@@ -381,7 +401,7 @@ if st.session_state.photo_gallery:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # 傳入選定的模型名稱 (eng_model_name 和 acc_model_name)
-            future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, GEMINI_KEY, eng_model_name)
+            future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, full_text_for_search, GEMINI_KEY, eng_model_name)
             future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, GEMINI_KEY, acc_model_name)
             
             res_eng, time_eng = future_eng.result()
@@ -400,7 +420,7 @@ if st.session_state.photo_gallery:
         all_issues = issues_eng + issues_acc
 
         st.success(f"工令: {job_no} | ⏱️ 總耗時: {total_duration:.1f}s")
-        st.caption(f"細節耗時: Azure OCR {ocr_duration:.1f}s | 工程師 {time_eng:.1f}s | 會計師 {time_acc:.1f}s")
+        st.caption(f"細節耗時: Azure OCR {ocr_duration:.1f}s | 工程師 ({eng_selection}) {time_eng:.1f}s | 會計師 ({acc_selection}) {time_acc:.1f}s")
         
         if not all_issues:
             st.balloons()
@@ -434,7 +454,6 @@ if st.session_state.photo_gallery:
     cols = st.columns(4)
     for idx, item in enumerate(st.session_state.photo_gallery):
         with cols[idx % 4]:
-            # 注意: 這裡改用 item['file'] 來顯示圖片
             st.image(item['file'], caption=f"P.{idx+1}", use_container_width=True)
             if st.button("❌", key=f"del_{idx}"):
                 st.session_state.photo_gallery.pop(idx)
