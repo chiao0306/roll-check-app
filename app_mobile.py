@@ -217,8 +217,6 @@ def agent_engineer_check(combined_input, full_text_for_search, api_key, model_na
     generation_config = {
         "response_mime_type": "application/json",
         "temperature": 0.0,
-        "top_p": 0.1,
-        "top_k": 1
     }
     
     try:
@@ -307,8 +305,6 @@ def agent_accountant_check(combined_input, api_key, model_name):
     generation_config = {
         "response_mime_type": "application/json",
         "temperature": 0.0,
-        "top_p": 0.1,
-        "top_k": 1
     }
 
     try:
