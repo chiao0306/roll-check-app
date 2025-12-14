@@ -248,7 +248,7 @@ def agent_engineer_check(combined_input, full_text_for_search, api_key, model_na
         return {"issues": []}
 
 # --- 5.2 Agent B: 會計師 (運費規則版) ---
-def agent_accountant_check(combined_input, api_key, model_name):
+def agent_accountant_check(combined_input, full_text_for_search, api_key, model_name):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
     
