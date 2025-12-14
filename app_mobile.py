@@ -254,8 +254,13 @@ def agent_accountant_check(combined_input, api_key, model_name):
     
     system_prompt = """
     你是一位極度嚴謹的中鋼機械品管【會計師】。
-    你的任務是專注於「數量核對」、「表頭一致性」與「上方統計表格」。
-    **請完全忽略** 尺寸公差與製程邏輯，那不是你的工作。
+
+    ### 📂 專案特定規範 (Project Rules)：
+    **請優先參考以下規則中的數量單位定義 (Unit_Rule)：**
+    {dynamic_rules}
+    -------------------------------------------------
+    任務：專注於「數量核對」、「表頭一致性」與「上方統計表格」。
+    **請完全忽略** 尺寸公差與製程邏輯。
 
     ### ⛔️ 排除指令：
     - 不檢查尺寸是否超規。
@@ -273,7 +278,8 @@ def agent_accountant_check(combined_input, api_key, model_name):
       - 規則：在同一個項目(如本體未再生)中，編號不可重複。
       - **注意**：同一編號出現在不同項目(如P2未再生、P3銲補)是正常流程，**不算** 重複。
       - 數量：該項目內的獨立編號總數 = 目標數量。
-    - **軸頸 (Journal) / 內孔**：允許單一編號出現 2 次。實測總數 = 目標數量。
+    - **軸頸 (Journal) / 內孔**：允許單一編號出現 2 次。
+      - 判定：**資料總筆數 (Total Row Count)** = 目標數量。
     - **Keyway**：Keyway 數量 <= 軸位再生數量。
 
     ### 3. 上方統計欄位稽核 (Summary Table Reconciliation) - 【邏輯修正】：
@@ -418,7 +424,7 @@ if st.session_state.photo_gallery:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # 傳入選定的模型名稱 (eng_model_name 和 acc_model_name)
             future_eng = executor.submit(run_with_timer, agent_engineer_check, combined_input, full_text_for_search, GEMINI_KEY, eng_model_name)
-            future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, GEMINI_KEY, acc_model_name)
+            future_acc = executor.submit(run_with_timer, agent_accountant_check, combined_input, full_text_for_search, GEMINI_KEY, acc_model_name)
             
             res_eng, time_eng = future_eng.result()
             res_acc, time_acc = future_acc.result()
@@ -431,8 +437,15 @@ if st.session_state.photo_gallery:
         
         # 3. 合併結果
         job_no = res_acc.get("job_no", "Unknown")
+        
+        # 幫工程師加標籤
         issues_eng = res_eng.get("issues", [])
+        for i in issues_eng: i['source'] = '👷 工程師'
+        
+        # 幫會計師加標籤
         issues_acc = res_acc.get("issues", [])
+        for i in issues_acc: i['source'] = '👨‍💼 會計師'
+        
         all_issues = issues_eng + issues_acc
 
         st.success(f"工令: {job_no} | ⏱️ 總耗時: {total_duration:.1f}s")
@@ -444,9 +457,10 @@ if st.session_state.photo_gallery:
         else:
             st.error(f"發現 {len(all_issues)} 類異常項目")
             for item in all_issues:
-                with st.container(border=True):
-                    c1, c2 = st.columns([3, 1])
-                    c1.markdown(f"**P.{item.get('page', '?')} | {item.get('item')}**")
+                    with st.container(border=True):
+                        c1, c2 = st.columns([3, 1])
+                        # 修改這裡：加上 source 顯示
+                        c1.markdown(f"**P.{item.get('page', '?')} | {item.get('item')}**  `{item.get('source', '')}`")
                     itype = item.get('issue_type', '異常')
                     if "流程" in itype or "尺寸" in itype or "統計" in itype: c2.error(f"🛑 {itype}")
                     else: c2.warning(f"⚠️ {itype}")
